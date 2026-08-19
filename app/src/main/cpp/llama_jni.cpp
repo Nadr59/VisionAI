@@ -3,7 +3,6 @@
 #include <vector>
 #include <android/log.h>
 #include "llama.h"
-#include "common.h"
 
 #define TAG "LlamaJNI"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
@@ -18,6 +17,16 @@ struct LlamaSession {
 
 static LlamaSession g_session;
 
+// ═══ Manual batch add (replaces common_batch_add) ═══
+static void batch_add(llama_batch& batch, llama_token token, int pos, bool generate_logits) {
+    batch.token[batch.n_tokens] = token;
+    batch.pos[batch.n_tokens] = pos;
+    batch.n_seq_id[batch.n_tokens] = 1;
+    batch.seq_id[batch.n_tokens][0] = 0;
+    batch.logits[batch.n_tokens] = generate_logits ? 1 : 0;
+    batch.n_tokens++;
+}
+
 extern "C" {
 
 JNIEXPORT jboolean JNICALL
@@ -28,14 +37,12 @@ Java_com_nadrlab_visionai_ai_LocalLlmManager_nativeLoadModel(
     const char* path = env->GetStringUTFChars(modelPath, nullptr);
     LOGI("Loading model: %s ctx=%d threads=%d", path, contextSize, threads);
 
-    // Free previous session
     if (g_session.is_loaded) {
         if (g_session.ctx) llama_free(g_session.ctx);
         if (g_session.model) llama_model_free(g_session.model);
         g_session.is_loaded = false;
     }
 
-    // Load model
     llama_model_params mparams = llama_model_default_params();
     mparams.n_gpu_layers = 0;
 
@@ -47,7 +54,6 @@ Java_com_nadrlab_visionai_ai_LocalLlmManager_nativeLoadModel(
         return JNI_FALSE;
     }
 
-    // Create context
     llama_context_params cparams = llama_context_default_params();
     cparams.n_ctx = contextSize;
     cparams.n_threads = threads;
@@ -98,7 +104,7 @@ Java_com_nadrlab_visionai_ai_LocalLlmManager_nativeGenerate(
     }
     tokens.resize(n_tokens);
 
-    // Clear KV cache using new API
+    // Clear KV cache
     llama_memory_clear(llama_get_memory(g_session.ctx), false);
 
     // Create batch
@@ -146,15 +152,14 @@ Java_com_nadrlab_visionai_ai_LocalLlmManager_nativeGenerate(
             std::string tokenStr(buf, len);
             result += tokenStr;
 
-            // Callback to Kotlin
             jstring jToken = env->NewStringUTF(tokenStr.c_str());
             env->CallVoidMethod(callback, onTokenMethod, jToken);
             env->DeleteLocalRef(jToken);
         }
 
-        // Prepare next token in batch using common_batch_add
+        // Prepare next token
         batch.n_tokens = 0;
-        common_batch_add(batch, new_token, n_tokens + n_generated, {0}, true);
+        batch_add(batch, new_token, n_tokens + n_generated, true);
 
         if (llama_decode(g_session.ctx, batch) != 0) {
             LOGE("Decode failed at token %d", n_generated);
@@ -195,9 +200,6 @@ Java_com_nadrlab_visionai_ai_LocalLlmManager_nativeIsLoaded(
 JNIEXPORT jlong JNICALL
 Java_com_nadrlab_visionai_ai_LocalLlmManager_nativeGetMemUsage(
     JNIEnv* env, jobject /* this */) {
-    if (!g_session.ctx) return 0;
-    // Return 0 since llama_get_memory_size was removed
-    // Memory tracking handled by Android
     return 0;
 }
 
