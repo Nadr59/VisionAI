@@ -18,6 +18,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.nadrlab.visionai.ui.*
 import com.nadrlab.visionai.ui.theme.VisionAiTheme
 import com.nadrlab.visionai.vm.MainViewModel
+import androidx.compose.ui.unit.sp
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
