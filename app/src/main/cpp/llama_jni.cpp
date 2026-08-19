@@ -37,7 +37,7 @@ Java_com_nadrlab_visionai_ai_LocalLlmManager_nativeLoadModel(
 
     // Load model
     llama_model_params mparams = llama_model_default_params();
-    mparams.n_gpu_layers = 0; // CPU only for Android
+    mparams.n_gpu_layers = 0;
 
     g_session.model = llama_model_load_from_file(path, mparams);
     env->ReleaseStringUTFChars(modelPath, path);
@@ -52,7 +52,6 @@ Java_com_nadrlab_visionai_ai_LocalLlmManager_nativeLoadModel(
     cparams.n_ctx = contextSize;
     cparams.n_threads = threads;
     cparams.n_threads_batch = threads;
-    cparams.flash_attn = false;
 
     g_session.ctx = llama_init_from_model(g_session.model, cparams);
     if (!g_session.ctx) {
@@ -99,11 +98,11 @@ Java_com_nadrlab_visionai_ai_LocalLlmManager_nativeGenerate(
     }
     tokens.resize(n_tokens);
 
-    // Clear KV cache
-    llama_kv_cache_clear(g_session.ctx);
+    // Clear KV cache using new API
+    llama_memory_clear(llama_get_memory(g_session.ctx), false);
 
     // Create batch
-    llama_batch batch = llama_batch_init(n_tokens, 0, 1);
+    llama_batch batch = llama_batch_init(n_tokens + maxTokens, 0, 1);
     for (int i = 0; i < n_tokens; i++) {
         batch.token[i] = tokens[i];
         batch.pos[i] = i;
@@ -121,7 +120,6 @@ Java_com_nadrlab_visionai_ai_LocalLlmManager_nativeGenerate(
     }
 
     // Sampler
-    auto* sparams = new llama_sampler_chain_params;
     llama_sampler* sampler = llama_sampler_chain_init(llama_sampler_chain_default_params());
     llama_sampler_chain_add(sampler, llama_sampler_init_temp(temperature));
     llama_sampler_chain_add(sampler, llama_sampler_init_top_p(topP, 1));
@@ -154,9 +152,9 @@ Java_com_nadrlab_visionai_ai_LocalLlmManager_nativeGenerate(
             env->DeleteLocalRef(jToken);
         }
 
-        // Prepare next batch
-        llama_batch_clear(batch);
-        llama_batch_add(batch, new_token, n_tokens + n_generated, {0}, true);
+        // Prepare next token in batch using common_batch_add
+        batch.n_tokens = 0;
+        common_batch_add(batch, new_token, n_tokens + n_generated, {0}, true);
 
         if (llama_decode(g_session.ctx, batch) != 0) {
             LOGE("Decode failed at token %d", n_generated);
@@ -168,7 +166,6 @@ Java_com_nadrlab_visionai_ai_LocalLlmManager_nativeGenerate(
 
     llama_batch_free(batch);
     llama_sampler_free(sampler);
-    delete sparams;
 
     LOGI("Generated %d tokens", n_generated);
     return env->NewStringUTF(result.c_str());
@@ -199,7 +196,9 @@ JNIEXPORT jlong JNICALL
 Java_com_nadrlab_visionai_ai_LocalLlmManager_nativeGetMemUsage(
     JNIEnv* env, jobject /* this */) {
     if (!g_session.ctx) return 0;
-    return (jlong)llama_get_memory_size(g_session.ctx);
+    // Return 0 since llama_get_memory_size was removed
+    // Memory tracking handled by Android
+    return 0;
 }
 
 } // extern "C"
