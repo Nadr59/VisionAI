@@ -89,7 +89,7 @@ class ModelDownloader(private val context: Context, private val settings: AppSet
             }
 
             val totalSize = body.contentLength() + downloaded
-            val outputStream = tempFile.outputStream(append = downloaded > 0)
+            val outputStream = java.io.FileOutputStream(tempFile, downloaded > 0)
             val buffer = ByteArray(8192)
             var bytesRead: Int
 
