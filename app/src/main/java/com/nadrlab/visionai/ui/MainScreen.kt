@@ -161,7 +161,7 @@ fun MainScreen(viewModel: MainViewModel) {
                     AnalysisTypeChip(
                         type = type,
                         selected = analysisType == type,
-                        onClick = { viewModel.setAnalysisType(type) )
+                        onClick = { viewModel.setAnalysisType(type) }  
                     }
                 }
             }
