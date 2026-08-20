@@ -5,9 +5,21 @@ import android.graphics.Bitmap
 import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import com.nadrlab.visionai.ai.*
-import com.nadrlab.visionai.data.*
-import com.nadrlab.visionai.domain.*
+import com.nadrlab.visionai.ai.CloudVisionManager
+import com.nadrlab.visionai.ai.ImageProcessor
+import com.nadrlab.visionai.ai.LocalLlmManager
+import com.nadrlab.visionai.ai.ModelDownloader
+import com.nadrlab.visionai.ai.OcrEngine
+import com.nadrlab.visionai.ai.WebSearchEngine
+import com.nadrlab.visionai.data.AnalysisEntity
+import com.nadrlab.visionai.data.AppDatabase
+import com.nadrlab.visionai.data.AppSettings
+import com.nadrlab.visionai.domain.AiMode
+import com.nadrlab.visionai.domain.AnalysisResult
+import com.nadrlab.visionai.domain.AnalysisState
+import com.nadrlab.visionai.domain.AnalysisType
+import com.nadrlab.visionai.domain.ConfidenceLevel
+import com.nadrlab.visionai.domain.SearchResult
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
@@ -40,22 +52,23 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val _isChatLoading = MutableStateFlow(false)
     val isChatLoading: StateFlow<Boolean> = _isChatLoading
 
+    private val _lastAnalysisText = MutableStateFlow("")
+    val lastAnalysisText: StateFlow<String> = _lastAnalysisText
+
     private val _history = MutableStateFlow<List<AnalysisEntity>>(emptyList())
     val history: StateFlow<List<AnalysisEntity>> = _history
-
-    // ═══ نص النتائج للمعالجة المحلية ═══
-    private var lastAnalysisText = ""
 
     init {
         _aiMode.value = AiMode.valueOf(settings.aiMode)
     }
 
     fun selectImage(bitmap: Bitmap, uri: Uri) {
+        _selectedImage.value?.recycle()
         _selectedImage.value = bitmap
         _selectedUri.value = uri
         _state.value = AnalysisState()
         _chatHistory.value = emptyList()
-        lastAnalysisText = ""
+        _lastAnalysisText.value = ""
     }
 
     fun clearImage() {
@@ -64,10 +77,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         _selectedUri.value = null
         _state.value = AnalysisState()
         _chatHistory.value = emptyList()
-        lastAnalysisText = ""
+        _lastAnalysisText.value = ""
     }
 
-    fun setAnalysisType(type: AnalysisType) { _analysisType.value = type }
+    fun setAnalysisType(type: AnalysisType) {
+        _analysisType.value = type
+    }
 
     fun setAiMode(mode: AiMode) {
         _aiMode.value = mode
@@ -83,6 +98,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             _state.value = AnalysisState(isLoading = true, progress = "جاري التحليل...")
             _chatHistory.value = emptyList()
+            _lastAnalysisText.value = ""
 
             try {
                 // 1. OCR
@@ -92,17 +108,20 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     ocrText = OcrEngine.recognize(bitmap)
                 }
 
-                // 2. Determine mode
+                // 2. Determine effective mode
                 val effectiveMode = when (mode) {
                     AiMode.AUTO -> AiMode.CLOUD
                     AiMode.LOCAL -> {
                         if (!settings.modelDownloaded) {
-                            _state.value = AnalysisState(isLoading = false, error = "النموذج المحلي غير مثبت. اذهب لصفحة النموذج لتحميله أو استخدم الوضع السحابي.")
+                            _state.value = AnalysisState(
+                                isLoading = false,
+                                error = "النموذج المحلي غير مثبت. اذهب لصفحة 'النموذج' أو استخدم الوضع السحابي."
+                            )
                             return@launch
                         }
                         AiMode.LOCAL
                     }
-                    else -> mode
+                    AiMode.CLOUD -> AiMode.CLOUD
                 }
 
                 // 3. Analyze
@@ -121,21 +140,23 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
                 // 4. Parse
                 val parsed = parseResult(resultText)
-                lastAnalysisText = buildContextForChat(parsed, ocrText)
+                _lastAnalysisText.value = buildContextForChat(parsed, ocrText)
 
                 // 5. Search
                 var searchResults = emptyList<SearchResult>()
                 if (settings.searchEnabled && parsed.keywords.isNotEmpty()) {
                     _state.value = _state.value.copy(progress = "البحث في الإنترنت...")
-                    val queries = WebSearchEngine.generateSearchQueries(parsed.keywords, parsed.contentType)
-                    val allResults = mutableListOf<SearchResult>()
-                    for (q in queries.take(3)) {
-                        allResults.addAll(WebSearchEngine.search(q))
-                    }
-                    searchResults = allResults.distinctBy { it.url }.take(10)
+                    try {
+                        val queries = WebSearchEngine.generateSearchQueries(parsed.keywords, parsed.contentType)
+                        val allResults = mutableListOf<SearchResult>()
+                        for (q in queries.take(3)) {
+                            allResults.addAll(WebSearchEngine.search(q))
+                        }
+                        searchResults = allResults.distinctBy { it.url }.take(10)
+                    } catch (_: Exception) {}
                 }
 
-                // 6. Save
+                // 6. Update state
                 _state.value = AnalysisState(
                     isLoading = false,
                     result = parsed,
@@ -143,6 +164,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     usedMode = effectiveMode
                 )
 
+                // 7. Save history
                 if (settings.saveHistory) {
                     saveToHistory(type, effectiveMode, parsed, searchResults, _selectedUri.value?.toString() ?: "")
                 }
@@ -154,17 +176,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     // ═══ المحادثة مع النموذج المحلي ═══
-        fun askLocalModel(question: String) {
+    fun askLocalModel(question: String) {
         viewModelScope.launch {
             _isChatLoading.value = true
 
-            // أضف سؤال المستخدم
             val currentHistory = _chatHistory.value.toMutableList()
             currentHistory.add("USER: $question")
             _chatHistory.value = currentHistory
 
             try {
-                // تحميل النموذج إذا لم يكن محملاً
                 if (!localLlm.isLoaded()) {
                     if (!settings.modelDownloaded) {
                         currentHistory.add("AI: ⚠️ النموذج المحلي غير مثبت. اذهب لصفحة 'النموذج' لتحميله.")
@@ -180,15 +200,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     }
                     val loaded = localLlm.loadModel()
                     if (!loaded) {
-                        currentHistory.add("AI: ⚠️ فشل تحميل النموذج. تأكد من سلامة الملف.")
+                        currentHistory.add("AI: ⚠️ فشل تحميل النموذج. تأكد من سلامة ملف التنزيل.")
                         _chatHistory.value = currentHistory
                         _isChatLoading.value = false
                         return@launch
                     }
                 }
 
-                // بناء البرومبت مع السياق
-                val prompt = buildChatPrompt(question, lastAnalysisText)
+                val prompt = buildChatPrompt(question, _lastAnalysisText.value)
                 val response = localLlm.generate(prompt)
 
                 currentHistory.add("AI: $response")
@@ -200,8 +219,53 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
             _isChatLoading.value = false
         }
+    }
+
+    // ═══ معالجة النتائج مباشرة ═══
+    fun processResults(fullPrompt: String, shortLabel: String) {
+        viewModelScope.launch {
+            _isChatLoading.value = true
+
+            val currentHistory = _chatHistory.value.toMutableList()
+            currentHistory.add("USER: $shortLabel")
+            _chatHistory.value = currentHistory
+
+            try {
+                if (!localLlm.isLoaded()) {
+                    if (!settings.modelDownloaded) {
+                        currentHistory.add("AI: ⚠️ النموذج غير مثبت")
+                        _chatHistory.value = currentHistory
+                        _isChatLoading.value = false
+                        return@launch
+                    }
+                    if (!localLlm.hasEnoughRam()) {
+                        currentHistory.add("AI: ⚠️ ذاكرة غير كافية")
+                        _chatHistory.value = currentHistory
+                        _isChatLoading.value = false
+                        return@launch
+                    }
+                    val loaded = localLlm.loadModel()
+                    if (!loaded) {
+                        currentHistory.add("AI: ⚠️ فشل تحميل النموذج")
+                        _chatHistory.value = currentHistory
+                        _isChatLoading.value = false
+                        return@launch
+                    }
+                }
+
+                val response = localLlm.generate(fullPrompt)
+                currentHistory.add("AI: $response")
+                _chatHistory.value = currentHistory
+            } catch (e: Exception) {
+                currentHistory.add("AI: خطأ: ${e.message}")
+                _chatHistory.value = currentHistory
+            }
+
+            _isChatLoading.value = false
         }
-    // ═══ بناء برومפט المحادثة ═══
+    }
+
+    // ═══ بناء برومبتات ═══
     private fun buildChatPrompt(question: String, context: String): String {
         return """أنت مساعد ذكي يجيب بالعربية. لديك نتائج تحليل صورة.
 
@@ -209,10 +273,9 @@ $context
 
 سؤال المستخدم: $question
 
-أجب بإيجاز وبالعربية:"""
+أجب بإيجاز وبوضوح:"""
     }
 
-    // ═══ بناء سياق المحادثة من النتائج ═══
     private fun buildContextForChat(result: AnalysisResult, ocr: String): String {
         return """نتائج التحليل:
 نوع المحتوى: ${result.contentType}
@@ -224,7 +287,6 @@ $context
 معلومات إضافية: ${result.additionalInfo}"""
     }
 
-    // ═══ بناء برومبت التحليل ═══
     private fun buildCloudPrompt(type: AnalysisType, ocrText: String): String {
         val base = """${type.prompt}
 
@@ -305,32 +367,38 @@ ${ocrText.ifBlank { "لا يوجد نص في الصورة" }}
         type: AnalysisType, mode: AiMode,
         result: AnalysisResult, search: List<SearchResult>, uri: String
     ) {
-        val entity = AnalysisEntity(
-            analysisType = type.name,
-            aiMode = mode.name,
-            contentType = result.contentType,
-            description = result.description,
-            elements = result.elements.joinToString("،"),
-            extractedText = result.extractedText,
-            keywords = result.keywords.joinToString("،"),
-            confidence = result.confidence.name,
-            fullResult = result.fullText,
-            searchResults = search.joinToString("\n") { "${it.title}|${it.url}" },
-            imageUri = uri
-        )
-        db.analysisDao().insert(entity)
+        try {
+            val entity = AnalysisEntity(
+                analysisType = type.name,
+                aiMode = mode.name,
+                contentType = result.contentType,
+                description = result.description,
+                elements = result.elements.joinToString("،"),
+                extractedText = result.extractedText,
+                keywords = result.keywords.joinToString("،"),
+                confidence = result.confidence.name,
+                fullResult = result.fullText,
+                searchResults = search.joinToString("\n") { "${it.title}|${it.url}" },
+                imageUri = uri
+            )
+            db.analysisDao().insert(entity)
+        } catch (_: Exception) {}
     }
 
     fun loadHistory() {
         viewModelScope.launch {
-            _history.value = db.analysisDao().getAll()
+            try {
+                _history.value = db.analysisDao().getAll()
+            } catch (_: Exception) {}
         }
     }
 
     fun deleteHistoryItem(entity: AnalysisEntity) {
         viewModelScope.launch {
-            db.analysisDao().delete(entity)
-            loadHistory()
+            try {
+                db.analysisDao().delete(entity)
+                loadHistory()
+            } catch (_: Exception) {}
         }
     }
 
