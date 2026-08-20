@@ -11,60 +11,54 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 class LocalLlmManager(private val context: Context, private val settings: AppSettings) {
 
-        companion object {
+    companion object {
         private const val TAG = "VisionAI_LLM"
-        private val LOG_FILE = File(
-            android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS),
-            "visionai_crash_log.txt"
-        )
-
-        fun log(msg: String) {
-            val line = "${java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.US).format(java.util.Date())} $msg\n"
-            Log.d(TAG, msg)
-            try {
-                LOG_FILE.appendText(line)
-            } catch (_: Exception) {}
-        }
-
-        fun clearLog() {
-            try { LOG_FILE.writeText("=== VisionAI Log Started ===\n") } catch (_: Exception) {}
-        }
 
         init {
             try {
                 System.loadLibrary("llama_jni")
-                log("✅ llama_jni loaded")
+                Log.i(TAG, "llama_jni loaded")
             } catch (e: UnsatisfiedLinkError) {
-                log("❌ Failed to load llama_jni: ${e.message}")
+                Log.e(TAG, "Failed to load llama_jni: ${e.message}")
             }
         }
-        }
+    }
 
+    private val logFile = File(context.filesDir, "crash_log.txt")
     private val _state = MutableStateFlow(ModelState.NOT_DOWNLOADED)
     val state: StateFlow<ModelState> = _state
-
     private val _memUsage = MutableStateFlow(0L)
     val memUsage: StateFlow<Long> = _memUsage
-
-    private var contextPtr: Long = 0L
     private var modelPtr: Long = 0L
 
+    private fun log(msg: String) {
+        val line = "${SimpleDateFormat("HH:mm:ss", Locale.US).format(Date())} $msg\n"
+        Log.d(TAG, msg)
+        try { logFile.appendText(line) } catch (_: Exception) {}
+    }
+
     init {
+        try { logFile.writeText("=== VisionAI Log ===\n") } catch (_: Exception) {}
         checkState()
     }
+
+    fun getLogFile(): File = logFile
 
     fun checkState() {
         if (settings.modelDownloaded && settings.modelPath.isNotBlank()) {
             val file = File(settings.modelPath)
-            if (file.exists() && file.length() > 500_000_000L) {
+            if (file.exists() && file.length() > 100_000_000L) {
                 _state.value = ModelState.READY
-                Log.i(TAG, "Model file found: ${file.absolutePath} (${file.length() / (1024*1024)} MB)")
+                log("Model found: ${file.length() / (1024*1024)} MB")
             } else {
-                Log.w(TAG, "Model file missing or too small: ${file.absolutePath} size=${if(file.exists()) file.length() else "NOT FOUND"}")
                 _state.value = ModelState.NOT_DOWNLOADED
+                log("Model not found or too small")
             }
         } else {
             _state.value = ModelState.NOT_DOWNLOADED
@@ -75,46 +69,43 @@ class LocalLlmManager(private val context: Context, private val settings: AppSet
         val am = context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
         val memInfo = ActivityManager.MemoryInfo()
         am.getMemoryInfo(memInfo)
-        val availableMb = memInfo.availMem / (1024 * 1024)
-        val totalMb = memInfo.totalMem / (1024 * 1024)
-        Log.i(TAG, "RAM: available=${availableMb}MB total=${totalMb}MB threshold=${memInfo.threshold / (1024*1024)}MB")
-        return availableMb > 500
+        val avail = memInfo.availMem / (1024 * 1024)
+        log("RAM check: available=${avail}MB")
+        return avail > 400
     }
 
     fun isLoaded(): Boolean = _state.value == ModelState.LOADED
 
-    
-
-                suspend fun loadModel(): Boolean = withContext(Dispatchers.IO) {
-        clearLog()
-        log("=== loadModel START ===")
-        log("modelPath: '${settings.modelPath}'")
-        log("modelDownloaded: ${settings.modelDownloaded}")
+    suspend fun loadModel(): Boolean = withContext(Dispatchers.IO) {
+        logFile.writeText("=== loadModel START ===\n")
+        log("State: ${_state.value}")
+        log("Path: '${settings.modelPath}'")
+        log("Downloaded flag: ${settings.modelDownloaded}")
 
         if (_state.value == ModelState.LOADED && modelPtr != 0L) {
-            log("Already loaded, returning true")
+            log("Already loaded")
             return@withContext true
         }
 
         val path = settings.modelPath
         if (path.isBlank()) {
-            log("❌ Path is blank!")
+            log("ERROR: path is blank")
             _state.value = ModelState.ERROR
             return@withContext false
         }
 
         val file = File(path)
         log("File exists: ${file.exists()}")
-        log("File size: ${file.length()} bytes (${file.length() / (1024*1024)} MB)")
+        log("File size: ${file.length()} (${file.length() / (1024*1024)} MB)")
 
         if (!file.exists()) {
-            log("❌ File not found: $path")
+            log("ERROR: file not found")
             _state.value = ModelState.ERROR
             return@withContext false
         }
 
         if (file.length() < 100_000_000L) {
-            log("❌ File too small: ${file.length() / (1024*1024)} MB")
+            log("ERROR: file too small (${file.length() / (1024*1024)} MB)")
             _state.value = ModelState.ERROR
             return@withContext false
         }
@@ -122,27 +113,30 @@ class LocalLlmManager(private val context: Context, private val settings: AppSet
         val am = context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
         val memInfo = ActivityManager.MemoryInfo()
         am.getMemoryInfo(memInfo)
-        log("RAM available: ${memInfo.availMem / (1024*1024)} MB / ${memInfo.totalMem / (1024*1024)} MB")
+        log("RAM: ${memInfo.availMem / (1024*1024)}MB free / ${memInfo.totalMem / (1024*1024)}MB total")
 
         _state.value = ModelState.LOADING
 
         try {
-            log("Calling nativeLoadModel(path=$path, ctx=${settings.contextSize}, threads=${settings.threads})")
+            log("Calling nativeLoadModel...")
+            log("  path=$path")
+            log("  contextSize=${settings.contextSize}")
+            log("  threads=${settings.threads}")
 
-            val loadResult = withTimeoutOrNull(120_000L) {
+            val result = withTimeoutOrNull(120_000L) {
                 nativeLoadModel(path, settings.contextSize, settings.threads)
             }
 
-            log("nativeLoadModel returned: $loadResult")
+            log("nativeLoadModel returned: $result")
 
-            if (loadResult == null) {
-                log("❌ nativeLoadModel TIMED OUT")
+            if (result == null) {
+                log("ERROR: TIMED OUT after 120s")
                 _state.value = ModelState.ERROR
                 return@withContext false
             }
 
-            if (!loadResult) {
-                log("❌ nativeLoadModel returned false")
+            if (!result) {
+                log("ERROR: nativeLoadModel returned false")
                 _state.value = ModelState.ERROR
                 return@withContext false
             }
@@ -151,84 +145,61 @@ class LocalLlmManager(private val context: Context, private val settings: AppSet
                 _memUsage.value = nativeGetMemUsage()
                 log("Memory usage: ${_memUsage.value / (1024*1024)} MB")
             } catch (e: Exception) {
-                log("⚠️ nativeGetMemUsage error: ${e.message}")
+                log("getMemUsage error: ${e.message}")
             }
 
+            modelPtr = 1L
             _state.value = ModelState.LOADED
-            log("=== loadModel SUCCESS ===")
+            log("SUCCESS: model loaded")
             return@withContext true
 
         } catch (e: Throwable) {
-            log("❌ loadModel CRASH: ${e.javaClass.simpleName}: ${e.message}")
+            log("CRASH: ${e.javaClass.simpleName}: ${e.message}")
             log("Stack: ${e.stackTraceToString().take(500)}")
             _state.value = ModelState.ERROR
             return@withContext false
         }
-                }
+    }
 
-         suspend fun generate(prompt: String): String {
+    suspend fun generate(prompt: String): String {
         log("generate called, state=${_state.value}")
 
         if (_state.value != ModelState.LOADED) {
-            log("Model not loaded, attempting load...")
+            log("Not loaded, attempting load...")
             val loaded = loadModel()
             if (!loaded) {
-                log("❌ Load failed, cannot generate")
-                return "النموذج غير جاهز. راجع سجل الأخطاء في Downloads/visionai_crash_log.txt"
+                log("Load failed")
+                return "النموذج غير جاهز"
             }
         }
 
         return withContext(Dispatchers.IO) {
             try {
-                log("Calling nativeGenerate, promptLen=${prompt.length}, maxTokens=${settings.maxTokens}")
-
+                log("nativeGenerate: promptLen=${prompt.length}")
                 val result = withTimeoutOrNull(180_000L) {
                     nativeGenerate(prompt, settings.maxTokens, settings.temperature, settings.topP, settings.topK, null)
                 }
+                log("nativeGenerate done, len=${result?.length}")
 
-                log("nativeGenerate returned, length=${result?.length}")
-
-                if (result == null) {
-                    log("❌ Generate timed out")
-                    return@withContext "⏰ انتهت المهلة"
-                }
-
-                if (result.isBlank()) {
-                    log("⚠️ Empty result")
-                    return@withContext "النموذج لم يُنتج رداً"
-                }
-
+                if (result == null) return@withContext "⏰ انتهت المهلة"
+                if (result.isBlank()) return@withContext "لم يُنتج رداً"
                 result
             } catch (e: Throwable) {
-                log("❌ generate CRASH: ${e.javaClass.simpleName}: ${e.message}")
+                log("generate CRASH: ${e.message}")
                 "خطأ: ${e.message}"
             }
         }
-         }
+    }
 
     fun unloadModel() {
-        Log.i(TAG, "unloadModel called")
-        try {
-            if (modelPtr != 0L || contextPtr != 0L) {
-                nativeUnload()
-                modelPtr = 0L
-                contextPtr = 0L
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "unloadModel error: ${e.message}")
-        }
+        try { nativeUnload() } catch (_: Exception) {}
+        modelPtr = 0L
         _state.value = ModelState.NOT_DOWNLOADED
         _memUsage.value = 0
-        settings.modelDownloaded = false
-        settings.modelPath = ""
     }
 
     private external fun nativeLoadModel(path: String, contextSize: Int, threads: Int): Boolean
-    private external fun nativeGenerate(
-        prompt: String, maxTokens: Int,
-        temperature: Float, topP: Float, topK: Int,
-        callback: TokenCallback?
-    ): String
+    private external fun nativeGenerate(prompt: String, maxTokens: Int, temperature: Float, topP: Float, topK: Int, callback: TokenCallback?): String
     private external fun nativeGetMemUsage(): Long
     private external fun nativeUnload()
 }
