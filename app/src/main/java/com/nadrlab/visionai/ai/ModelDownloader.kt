@@ -183,7 +183,7 @@ class ModelDownloader(private val context: Context, private val settings: AppSet
     }
 
     // ═══ نسخ من ملف موجود ═══
-    private suspend fun copyModelFile(sourceFile: File): Boolean {
+        private suspend fun copyModelFile(sourceFile: File): Boolean {
         _state.value = ModelState.DOWNLOADING
         _progress.value = 0f
         _statusMessage.value = "جاري النسخ من: ${sourceFile.name}..."
@@ -223,14 +223,14 @@ class ModelDownloader(private val context: Context, private val settings: AppSet
                 }
             }
 
-            returnFinalFile(tempFile, destFile)
+            return returnFinalFile(tempFile, destFile)
         } catch (e: Exception) {
             tempFile.delete()
             _state.value = ModelState.ERROR
             _statusMessage.value = "خطأ: ${e.message}"
-            false
+            return false
         }
-    }
+        }
 
     // ═══ تحقق واحتفظ بالملف النهائي ═══
     private fun returnFinalFile(tempFile: File, destFile: File): Boolean {
