@@ -27,11 +27,11 @@ class AppSettings(context: Context) {
 
     // Model settings
     var contextSize: Int
-        get() = prefs.getInt("context_size", 2048)
+        get() = prefs.getInt("context_size", 512)
         set(v) = prefs.edit().putInt("context_size", v).apply()
 
     var threads: Int
-        get() = prefs.getInt("threads", 4)
+        get() = prefs.getInt("threads", 3)
         set(v) = prefs.edit().putInt("threads", v).apply()
 
     var temperature: Float
@@ -47,7 +47,7 @@ class AppSettings(context: Context) {
         set(v) = prefs.edit().putInt("top_k", v).apply()
 
     var maxTokens: Int
-        get() = prefs.getInt("max_tokens", 640)
+        get() = prefs.getInt("max_tokens", 150)
         set(v) = prefs.edit().putInt("max_tokens", v).apply()
 
     var modelPath: String
