@@ -25,13 +25,13 @@ class LocalLlmManager(private val context: Context, private val settings: AppSet
         }
     }
 
-    fun hasEnoughRam(): Boolean {
+        fun hasEnoughRam(): Boolean {
         val am = context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
         val memInfo = ActivityManager.MemoryInfo()
         am.getMemoryInfo(memInfo)
         val availableMb = memInfo.availMem / (1024 * 1024)
-        return availableMb > 1500 // Need at least 1.5GB free
-    }
+        return availableMb > 800 // Lowered for Redmi 8
+        }
 
     suspend fun loadModel(): Boolean = withContext(Dispatchers.IO) {
         if (_state.value == ModelState.LOADED) return@withContext true
