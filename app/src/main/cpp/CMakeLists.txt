@@ -2,45 +2,41 @@ cmake_minimum_required(VERSION 3.22.1)
 project("llama_jni")
 
 set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_C_STANDARD 11)
 
-# llama.cpp source files
 set(LLAMA_DIR ${CMAKE_CURRENT_SOURCE_DIR}/llama.cpp)
 
-add_library(llama SHARED
-    ${LLAMA_DIR}/src/llama.cpp
-    ${LLAMA_DIR}/src/llama-vocab.cpp
-    ${LLAMA_DIR}/src/llama-grammar.cpp
-    ${LLAMA_DIR}/src/llama-sampling.cpp
-    ${LLAMA_DIR}/src/unicode.cpp
-    ${LLAMA_DIR}/src/grammar-parser.cpp
-    ${LLAMA_DIR}/ggml/src/ggml.c
-    ${LLAMA_DIR}/ggml/src/ggml-alloc.c
-    ${LLAMA_DIR}/ggml/src/ggml-backend.cpp
-    ${LLAMA_DIR}/ggml/src/ggml-quants.c
-    ${LLAMA_DIR}/ggml/src/ggml-threading.cpp
-    ${LLAMA_DIR}/ggml/src/ggml-cpu/ggml-cpu.c
-    ${LLAMA_DIR}/ggml/src/ggml-cpu/ggml-cpu-quants.c
-    ${LLAMA_DIR}/common/common.cpp
-    ${LLAMA_DIR}/common/log.cpp
-    ${LLAMA_DIR}/common/sampling.cpp
-    ${LLAMA_DIR}/common/build-info.cpp
-    ${LLAMA_DIR}/common/ngram-cache.cpp
-    ${LLAMA_DIR}/common/arg.cpp
-)
+# Disable everything we don't need
+set(LLAMA_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(LLAMA_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(LLAMA_BUILD_SERVER OFF CACHE BOOL "" FORCE)
+set(LLAMA_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
+set(LLAMA_METAL OFF CACHE BOOL "" FORCE)
+set(LLAMA_CUDA OFF CACHE BOOL "" FORCE)
+set(LLAMA_VULKAN OFF CACHE BOOL "" FORCE)
+set(LLAMA_OPENCL OFF CACHE BOOL "" FORCE)
+set(LLAMA_SYCL OFF CACHE BOOL "" FORCE)
+set(LLAMA_KOMPUTE OFF CACHE BOOL "" FORCE)
+set(GGML_METAL OFF CACHE BOOL "" FORCE)
+set(GGML_CUDA OFF CACHE BOOL "" FORCE)
+set(GGML_VULKAN OFF CACHE BOOL "" FORCE)
+set(GGML_OPENCL OFF CACHE BOOL "" FORCE)
 
-target_include_directories(llama PUBLIC
+# Build llama.cpp using its own cmake
+add_subdirectory(${LLAMA_DIR} llama_build)
+
+# Our JNI library
+add_library(llama_jni SHARED llama_jni.cpp)
+
+target_include_directories(llama_jni PRIVATE
     ${LLAMA_DIR}/include
     ${LLAMA_DIR}/common
-    ${LLAMA_DIR}/ggml/include
-    ${LLAMA_DIR}/ggml/src
-    ${LLAMA_DIR}/src
 )
 
-target_compile_definitions(llama PUBLIC
-    GGML_USE_CPU
-    LLAMA_BUILD
+target_link_libraries(llama_jni
+    PRIVATE
+    llama
+    common
+    android
+    log
 )
-
-# JNI library
-add_library(llama_jni SHARED llama_jni.cpp)
-target_link_libraries(llama_jni llama android log)
