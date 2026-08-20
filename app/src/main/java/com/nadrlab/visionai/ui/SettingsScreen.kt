@@ -62,6 +62,29 @@ fun SettingsScreen(viewModel: MainViewModel) {
         Spacer(Modifier.height(80.dp))
     }
 }
+        // ═══ ZenMux ═══
+        item {
+            SettingsSection("ZenMux API (مباشر)") {
+                SettingsTextField(
+                    label = "API Key",
+                    value = settings.zenmuxKey,
+                    onValueChange = { settings.zenmuxKey = it },
+                    placeholder = "zm-..."
+                )
+                SettingsTextField(
+                    label = "النموذج",
+                    value = settings.zenmuxModel,
+                    onValueChange = { settings.zenmuxModel = it },
+                    placeholder = "z-ai/glm-5.3-free"
+                )
+                SettingsTextField(
+                    label = "الرابط",
+                    value = settings.zenmuxUrl,
+                    onValueChange = { settings.zenmuxUrl = it },
+                    placeholder = "https://zenmux.ai/api/chat/completions"
+                )
+            }
+        }
 
 @Composable
 fun SettingsCard(title: String, content: @Composable ColumnScope.() -> Unit) {
