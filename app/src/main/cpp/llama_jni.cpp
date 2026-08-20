@@ -14,6 +14,20 @@ static llama_context *g_ctx = nullptr;
 static const llama_vocab *g_vocab = nullptr;
 static bool g_loaded = false;
 
+// Helper: create batch for multiple tokens at given position
+static llama_batch make_batch(const llama_token *tokens, int n, int pos_start, bool all_logits) {
+    llama_batch batch = llama_batch_init(n, 0, 1);
+    for (int i = 0; i < n; i++) {
+        batch.token[i] = tokens[i];
+        batch.pos[i] = pos_start + i;
+        batch.n_seq_id[i] = 1;
+        batch.seq_id[i][0] = 0;
+        batch.logits[i] = all_logits ? 1 : (i == n - 1) ? 1 : 0;
+    }
+    batch.n_tokens = n;
+    return batch;
+}
+
 extern "C" JNIEXPORT jboolean JNICALL
 Java_com_nadrlab_visionai_ai_LocalLlmManager_nativeLoadModel(
     JNIEnv *env, jobject, jstring jpath, jint ctx_size, jint threads)
@@ -64,18 +78,20 @@ Java_com_nadrlab_visionai_ai_LocalLlmManager_nativeGenerate(
 
     // ═══ Tokenize ═══
     int n_tok = llama_tokenize(g_vocab, prompt.c_str(), (int)prompt.size(), nullptr, 0, true, false);
-    if (n_tok <= 0) { LOGE("Tok cnt: %d", n_tok); return env->NewStringUTF("خطأ tokenize"); }
+    if (n_tok <= 0) { LOGE("Tok cnt: %d", n_tok); return env->NewStringUTF("خطأ في تحليل النص"); }
+
     std::vector<llama_token> toks(n_tok);
     n_tok = llama_tokenize(g_vocab, prompt.c_str(), (int)prompt.size(), toks.data(), n_tok, true, false);
-    if (n_tok <= 0) { LOGE("Tok fill: %d", n_tok); return env->NewStringUTF("خطأ tokenize2"); }
-    LOGI("Toks: %d", n_tok);
+    if (n_tok <= 0) { LOGE("Tok fill: %d", n_tok); return env->NewStringUTF("خطأ في تحليل النص"); }
+    LOGI("Tokens: %d", n_tok);
 
-    // ═══ Decode prompt using llama_batch_get_one ═══
-    LOGI("Decode prompt...");
+    // ═══ Decode prompt ═══
+    LOGI("Decoding prompt...");
     {
-        llama_batch batch = llama_batch_get_one(toks.data(), n_tok, 0, 0);
+        llama_batch batch = make_batch(toks.data(), n_tok, 0, false);
         int r = llama_decode(g_ctx, batch);
-        if (r != 0) { LOGE("Prompt decode: %d", r); return env->NewStringUTF("خطأ decode: "); }
+        llama_batch_free(batch);
+        if (r != 0) { LOGE("Prompt decode: %d", r); return env->NewStringUTF("خطأ في معالجة النص"); }
     }
     LOGI("Prompt OK");
 
@@ -102,9 +118,11 @@ Java_com_nadrlab_visionai_ai_LocalLlmManager_nativeGenerate(
         if (len > 0) { result.append(buf, len); gen++; }
 
         // Feed next token
-        llama_batch batch = llama_batch_get_one(&tok, 1, pos++, 0);
+        llama_batch batch = make_batch(&tok, 1, pos, true);
+        pos++;
         int r = llama_decode(g_ctx, batch);
-        if (r != 0) { LOGE("Gen decode@%d: %d", i, r); break; }
+        llama_batch_free(batch);
+        if (r != 0) { LOGE("Gen@%d: %d", i, r); break; }
 
         if (gen % 10 == 0 && gen > 0) LOGI("..%d", gen);
     }
