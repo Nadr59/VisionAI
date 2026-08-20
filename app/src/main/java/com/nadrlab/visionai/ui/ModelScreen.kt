@@ -1,6 +1,10 @@
 package com.nadrlab.visionai.ui
 
+import android.content.Intent
 import android.net.Uri
+import android.os.Build
+import android.os.Environment
+import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -22,6 +26,7 @@ import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.PhoneAndroid
+import androidx.compose.material.icons.filled.Security
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -61,13 +66,38 @@ fun ModelScreen(viewModel: MainViewModel) {
     val statusMsg by downloader.statusMessage.collectAsState()
     val scope = rememberCoroutineScope()
 
-    var manualPath by remember { mutableStateOf("/storage/emulated/0/Download/Qwen3-1.7B-Q4_K_M.gguf") }
+    var manualPath by remember {
+        mutableStateOf("/storage/emulated/0/Download/Qwen3-1.7B-Q4_K_M.gguf")
+    }
 
-    val filePicker = rememberLauncherForActivityResult(
-        ActivityResultContracts.GetContent()
+    // ═══ SAF file picker (يعمل مع الصلاحيات) ═══
+    val safPicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
     ) { uri: Uri? ->
         uri?.let {
+            // Take persistent permission
+            try {
+                context.contentResolver.takePersistableUriPermission(
+                    it, Intent.FLAG_GRANT_READ_URI_PERMISSION
+                )
+            } catch (_: Exception) {}
             scope.launch { downloader.importFromUri(it) }
+        }
+    }
+
+    // ═══ طلب صلاحية MANAGE_EXTERNAL_STORAGE ═══
+    val storagePermLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) {
+        // After returning from settings, try auto-search
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R &&
+            Environment.isExternalStorageManager()) {
+            scope.launch {
+                val found = downloader.findModelOnDevice()
+                if (found != null) {
+                    downloader.importFromPath(found.absolutePath)
+                }
+            }
         }
     }
 
@@ -114,9 +144,7 @@ fun ModelScreen(viewModel: MainViewModel) {
                 Text("${(progress * 100).toInt()}%", color = Color.White, fontSize = 13.sp)
             } else {
                 LinearProgressIndicator(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(8.dp),
+                    modifier = Modifier.fillMaxWidth().height(8.dp),
                     color = Color(0xFF38BDF8),
                     trackColor = Color(0xFF1A1A2E)
                 )
@@ -131,38 +159,70 @@ fun ModelScreen(viewModel: MainViewModel) {
             }
         }
 
-        // ═══ أزرار (عند عدم التثبيت) ═══
+        // ═══ أزرار عند عدم التثبيت ═══
         if (dlState == ModelState.NOT_DOWNLOADED || dlState == ModelState.ERROR) {
 
-            // نصيحة
-            Card(
-                colors = CardDefaults.cardColors(containerColor = Color(0xFF2A2A1A)),
-                shape = RoundedCornerShape(10.dp)
+            // الطريقة 1: اختيار ملف (SAF — يعمل دائماً)
+            Button(
+                onClick = { safPicker.launch(arrayOf("*/*")) },
+                modifier = Modifier.fillMaxWidth(),
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4CAF50)),
+                shape = RoundedCornerShape(12.dp)
             ) {
-                Column(Modifier.padding(14.dp)) {
-                    Text("💡 طريقة التحميل", color = Color(0xFFE8C547), fontSize = 13.sp, fontWeight = FontWeight.Bold)
-                    Spacer(Modifier.height(6.dp))
-                    Text("1. حمّل الملف من المتصفح أو Termux", color = Color.Gray, fontSize = 12.sp)
-                    Text("2. استورده من هنا", color = Color.Gray, fontSize = 12.sp)
-                    Spacer(Modifier.height(4.dp))
-                    Text("الملف: $MODEL_FILENAME", color = Color(0xFF666666), fontSize = 10.sp)
+                Icon(Icons.Default.FolderOpen, null, tint = Color.White)
+                Spacer(Modifier.width(8.dp))
+                Column {
+                    Text("اختيار ملف GGUF", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                    Text("من أي مكان في الجهاز (يعمل دائماً)", color = Color.White.copy(alpha = 0.7f), fontSize = 11.sp)
                 }
             }
 
-            // ═══ إدخال المسار يدوياً ═══
+            // الطريقة 2: بحث تلقائي + صلاحيات
+            Button(
+                onClick = {
+                    scope.launch {
+                        // Check if we have permission
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                            if (!Environment.isExternalStorageManager()) {
+                                // Request permission
+                                val intent = Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION)
+                                intent.data = Uri.parse("package:${context.packageName}")
+                                storagePermLauncher.launch(intent)
+                                return@launch
+                            }
+                        }
+                        // Search and import
+                        val found = downloader.findModelOnDevice()
+                        if (found != null) {
+                            downloader.importFromPath(found.absolutePath)
+                        }
+                    }
+                },
+                modifier = Modifier.fillMaxWidth(),
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1A3A5F)),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Icon(Icons.Default.PhoneAndroid, null, tint = Color.White)
+                Spacer(Modifier.width(8.dp))
+                Column {
+                    Text("بحث تلقائي + نسخ", color = Color.White, fontSize = 14.sp)
+                    Text("يبحث في Download ويستورده (يحتاج صلاحية)", color = Color.White.copy(alpha = 0.6f), fontSize = 10.sp)
+                }
+            }
+
+            // الطريقة 3: إدخال المسار يدوياً
             Card(
                 colors = CardDefaults.cardColors(containerColor = Color(0xFF1A1A2E)),
                 shape = RoundedCornerShape(12.dp)
             ) {
                 Column(Modifier.padding(14.dp)) {
-                    Text("📂 استيراد بالمسار", color = Color(0xFFE8C547), fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                    Text("📂 استيراد بالمسار (متقدم)", color = Color(0xFFE8C547), fontSize = 12.sp, fontWeight = FontWeight.Bold)
                     Spacer(Modifier.height(8.dp))
                     OutlinedTextField(
                         value = manualPath,
                         onValueChange = { manualPath = it },
                         modifier = Modifier.fillMaxWidth(),
                         label = { Text("مسار الملف", color = Color.Gray, fontSize = 12.sp) },
-                        placeholder = { Text("/storage/emulated/0/Download/...", color = Color(0xFF444444), fontSize = 11.sp) },
                         colors = OutlinedTextFieldDefaults.colors(
                             focusedTextColor = Color.White,
                             unfocusedTextColor = Color.White,
@@ -177,47 +237,15 @@ fun ModelScreen(viewModel: MainViewModel) {
                     Button(
                         onClick = { scope.launch { downloader.importFromPath(manualPath) } },
                         modifier = Modifier.fillMaxWidth(),
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4CAF50)),
-                        shape = RoundedCornerShape(10.dp)
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF38BDF8)),
+                        shape = RoundedCornerShape(8.dp)
                     ) {
-                        Icon(Icons.Default.Edit, null, tint = Color.White, modifier = Modifier.size(18.dp))
-                        Spacer(Modifier.width(6.dp))
-                        Text("استيراد من المسار", color = Color.White, fontSize = 14.sp)
+                        Text("استيراد", color = Color.Black, fontSize = 13.sp)
                     }
                 }
             }
 
-            // ═══ بحث تلقائي ═══
-            Button(
-                onClick = {
-                    scope.launch {
-                        val found = downloader.findModelOnDevice()
-                        if (found != null) {
-                            downloader.importFromPath(found.absolutePath)
-                        }
-                    }
-                },
-                modifier = Modifier.fillMaxWidth(),
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1A3A5F)),
-                shape = RoundedCornerShape(12.dp)
-            ) {
-                Icon(Icons.Default.PhoneAndroid, null, tint = Color.White)
-                Spacer(Modifier.width(8.dp))
-                Text("بحث تلقائي عن النموذج", color = Color.White)
-            }
-
-            // ═══ استيراد من ملف ═══
-            OutlinedButton(
-                onClick = { filePicker.launch("*/*") },
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(12.dp)
-            ) {
-                Icon(Icons.Default.FolderOpen, null, tint = Color.Gray)
-                Spacer(Modifier.width(8.dp))
-                Text("اختيار ملف من الجهاز", color = Color.Gray)
-            }
-
-            // ═══ تنزيل من الإنترنت ═══
+            // الطريقة 4: تنزيل
             OutlinedButton(
                 onClick = { scope.launch { downloader.download() } },
                 modifier = Modifier.fillMaxWidth(),
@@ -225,7 +253,19 @@ fun ModelScreen(viewModel: MainViewModel) {
             ) {
                 Icon(Icons.Default.Download, null, tint = Color.Gray)
                 Spacer(Modifier.width(8.dp))
-                Text("تنزيل من الإنترنت (بطيء)", color = Color.Gray, fontSize = 12.sp)
+                Text("تنزيل من الإنترنت (بطيء جداً)", color = Color.Gray, fontSize = 12.sp)
+            }
+
+            // نصيحة
+            Card(
+                colors = CardDefaults.cardColors(containerColor = Color(0xFF2A2A1A)),
+                shape = RoundedCornerShape(10.dp)
+            ) {
+                Column(Modifier.padding(14.dp)) {
+                    Text("💡 نصيحة", color = Color(0xFFE8C547), fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    Spacer(Modifier.height(4.dp))
+                    Text("استخدم 'اختيار ملف GGUF' — يفتح منتقي الملفات ويعمل مع أي مكان", color = Color.Gray, fontSize = 11.sp)
+                }
             }
         }
 
@@ -254,11 +294,10 @@ fun ModelScreen(viewModel: MainViewModel) {
         // ═══ تحميل ═══
         if (dlState == ModelState.LOADING) {
             CircularProgressIndicator(
-                modifier = Modifier
-                    .size(32.dp)
-                    .align(Alignment.CenterHorizontally),
+                modifier = Modifier.size(32.dp).align(Alignment.CenterHorizontally),
                 color = Color(0xFF38BDF8)
             )
+            Text("جاري تحميل النموذج في الذاكرة...", color = Color.Gray, fontSize = 12.sp, modifier = Modifier.align(Alignment.CenterHorizontally))
         }
 
         Spacer(Modifier.height(80.dp))
@@ -287,5 +326,3 @@ private fun stateColor(state: ModelState): Color = when (state) {
     ModelState.ERROR -> Color(0xFFF44336)
     else -> Color(0xFFFFC107)
 }
-
-private const val MODEL_FILENAME = ModelDownloader.MODEL_FILENAME
