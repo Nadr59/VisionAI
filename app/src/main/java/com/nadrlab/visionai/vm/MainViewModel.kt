@@ -177,79 +177,86 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     // ═══ المحادثة مع النموذج المحلي ═══
-        fun askLocalModel(question: String) {
+             fun askLocalModel(question: String) {
         viewModelScope.launch {
             _isChatLoading.value = true
+            android.util.Log.i("VisionAI_VM", "askLocalModel: question='$question'")
 
             val currentHistory = _chatHistory.value.toMutableList()
             currentHistory.add("USER: $question")
             _chatHistory.value = currentHistory
 
             try {
-                // تحميل النموذج
+                android.util.Log.i("VisionAI_VM", "modelDownloaded=${settings.modelDownloaded}, modelPath='${settings.modelPath}'")
+                android.util.Log.i("VisionAI_VM", "localLlm.isLoaded=${localLlm.isLoaded()}, localLlm.state=${localLlm.state.value}")
+
                 if (!localLlm.isLoaded()) {
+                    android.util.Log.i("VisionAI_VM", "Model not loaded, attempting to load...")
+
                     if (!settings.modelDownloaded) {
-                        currentHistory.add("AI: ⚠️ النموذج غير مثبت")
-                        _chatHistory.value = currentHistory
-                        _isChatLoading.value = false
-                        return@launch
-                    }
-                    if (!localLlm.hasEnoughRam()) {
-                        currentHistory.add("AI: ⚠️ ذاكرة غير كافية. أغلق التطبيقات الأخرى")
+                        android.util.Log.w("VisionAI_VM", "Model not downloaded!")
+                        currentHistory.add("AI: ⚠️ النموذج غير مثبت. اذهب لصفحة 'النموذج'.")
                         _chatHistory.value = currentHistory
                         _isChatLoading.value = false
                         return@launch
                     }
 
-                    // تحديث: جاري تحميل النموذج
-                    currentHistory.add("AI: ⏳ جاري تحميل النموذج... قد يستغرق دقيقة")
+                    if (!localLlm.hasEnoughRam()) {
+                        android.util.Log.w("VisionAI_VM", "Not enough RAM!")
+                        currentHistory.add("AI: ⚠️ ذاكرة غير كافية. أغلق التطبيقات.")
+                        _chatHistory.value = currentHistory
+                        _isChatLoading.value = false
+                        return@launch
+                    }
+
+                    currentHistory.add("AI: ⏳ جاري تحميل النموذج... (قد يستغرق 1-2 دقيقة)")
                     _chatHistory.value = currentHistory
 
+                    android.util.Log.i("VisionAI_VM", "Calling localLlm.loadModel()...")
                     val loaded = localLlm.loadModel()
+                    android.util.Log.i("VisionAI_VM", "loadModel returned: $loaded")
+
                     if (!loaded) {
-                        // استبدل رسالة "جاري التحميل" برسالة الخطأ
                         val updated = _chatHistory.value.toMutableList()
                         updated.removeLast()
-                        updated.add("AI: ⚠️ فشل تحميل النموذج")
+                        updated.add("AI: ⚠️ فشل تحميل النموذج. تأكد من:\n• حجم الملف (>500MB)\n• ذاكرة كافية\n• إغلاق التطبيقات الأخرى")
                         _chatHistory.value = updated
                         _isChatLoading.value = false
                         return@launch
                     }
 
-                    // استبدل رسالة "جاري التحميل" بنجاح
+                    // Remove "loading" message
                     val updated = _chatHistory.value.toMutableList()
                     updated.removeLast()
                     _chatHistory.value = updated
                 }
 
-                // إضافة رسالة "جاري التفكير"
                 currentHistory.add("AI: 🤔 جاري التفكير...")
                 _chatHistory.value = currentHistory
 
-                // توليد الرد مع timeout
+                android.util.Log.i("VisionAI_VM", "Calling localLlm.generate()...")
                 val prompt = buildChatPrompt(question, _lastAnalysisText.value)
-                val response = withTimeoutOrNull(180_000L) { // 3 دقائق timeout
-                    localLlm.generate(prompt)
-                } ?: "⏰ انتهت المهلة. النموذج بطيء جداً على هذا الجهاز."
+                val response = localLlm.generate(prompt)
+                android.util.Log.i("VisionAI_VM", "Generate result: ${response.take(100)}...")
 
-                // استبدل رسالة "جاري التفكير" بالرد
                 val finalHistory = _chatHistory.value.toMutableList()
                 finalHistory.removeLast()
                 finalHistory.add("AI: $response")
                 _chatHistory.value = finalHistory
 
             } catch (e: Exception) {
+                android.util.Log.e("VisionAI_VM", "askLocalModel EXCEPTION: ${e.message}", e)
                 val errorHistory = _chatHistory.value.toMutableList()
                 if (errorHistory.lastOrNull()?.contains("جاري") == true) {
                     errorHistory.removeLast()
                 }
-                errorHistory.add("AI: خطأ: ${e.message}")
+                errorHistory.add("AI: ❌ خطأ: ${e.message}")
                 _chatHistory.value = errorHistory
             }
 
             _isChatLoading.value = false
         }
-        }
+             }
 
     // ═══ معالجة النتائج مباشرة ═══
         fun processResults(fullPrompt: String, shortLabel: String) {
