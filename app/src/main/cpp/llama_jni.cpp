@@ -4,7 +4,8 @@
 #include <android/log.h>
 
 #include "llama.h"
-#include "common.h"
+// common.h not needed
+// No common.h needed — using llama.h directly
 
 #define TAG "VisionAI_JNI"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
