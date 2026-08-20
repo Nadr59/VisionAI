@@ -154,7 +154,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     // ═══ المحادثة مع النموذج المحلي ═══
-    fun askLocalModel(question: String) {
+        fun askLocalModel(question: String) {
         viewModelScope.launch {
             _isChatLoading.value = true
 
@@ -165,10 +165,29 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
             try {
                 // تحميل النموذج إذا لم يكن محملاً
-                if (!localLlm.isLoaded() && settings.modelDownloaded) {
-                    localLlm.loadModel()
+                if (!localLlm.isLoaded()) {
+                    if (!settings.modelDownloaded) {
+                        currentHistory.add("AI: ⚠️ النموذج المحلي غير مثبت. اذهب لصفحة 'النموذج' لتحميله.")
+                        _chatHistory.value = currentHistory
+                        _isChatLoading.value = false
+                        return@launch
+                    }
+                    if (!localLlm.hasEnoughRam()) {
+                        currentHistory.add("AI: ⚠️ ذاكرة الجهاز غير كافية. أغلق التطبيقات الأخرى وحاول مرة أخرى.")
+                        _chatHistory.value = currentHistory
+                        _isChatLoading.value = false
+                        return@launch
+                    }
+                    val loaded = localLlm.loadModel()
+                    if (!loaded) {
+                        currentHistory.add("AI: ⚠️ فشل تحميل النموذج. تأكد من سلامة الملف.")
+                        _chatHistory.value = currentHistory
+                        _isChatLoading.value = false
+                        return@launch
+                    }
                 }
 
+                // بناء البرومبت مع السياق
                 val prompt = buildChatPrompt(question, lastAnalysisText)
                 val response = localLlm.generate(prompt)
 
@@ -181,8 +200,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
             _isChatLoading.value = false
         }
-    }
-
+        }
     // ═══ بناء برومפט المحادثة ═══
     private fun buildChatPrompt(question: String, context: String): String {
         return """أنت مساعد ذكي يجيب بالعربية. لديك نتائج تحليل صورة.
