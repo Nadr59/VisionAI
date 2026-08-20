@@ -24,6 +24,9 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
+private fun StringBuilder.AppendLine(line: String) {
+    this.append(line).append("\n")
+}
 
 class MainViewModel(app: Application) : AndroidViewModel(app) {
 
@@ -177,86 +180,61 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     // ═══ المحادثة مع النموذج المحلي ═══
-             fun askLocalModel(question: String) {
+                  fun askLocalModel(question: String) {
         viewModelScope.launch {
             _isChatLoading.value = true
-            android.util.Log.i("VisionAI_VM", "askLocalModel: question='$question'")
 
             val currentHistory = _chatHistory.value.toMutableList()
             currentHistory.add("USER: $question")
             _chatHistory.value = currentHistory
 
             try {
-                android.util.Log.i("VisionAI_VM", "modelDownloaded=${settings.modelDownloaded}, modelPath='${settings.modelPath}'")
-                android.util.Log.i("VisionAI_VM", "localLlm.isLoaded=${localLlm.isLoaded()}, localLlm.state=${localLlm.state.value}")
+                val file = java.io.File(settings.modelPath)
+                val fileSizeMb = if (file.exists()) file.length() / (1024 * 1024) else 0
 
-                if (!localLlm.isLoaded()) {
-                    android.util.Log.i("VisionAI_VM", "Model not loaded, attempting to load...")
+                // ═══ تشخيص كامل ═══
+                val diag = StringBuilder()
+                diag.AppendLine("📋 تشخيص:")
+                diag.AppendLine("المسار: ${settings.modelPath}")
+                diag.AppendLine("موجود: ${file.exists()}")
+                diag.AppendLine("الحجم: ${fileSizeMb} MB")
+                diag.AppendLine("التحميل: ${settings.modelDownloaded}")
+                diag.AppendLine("الحالة: ${localLlm.state.value}")
 
-                    if (!settings.modelDownloaded) {
-                        android.util.Log.w("VisionAI_VM", "Model not downloaded!")
-                        currentHistory.add("AI: ⚠️ النموذج غير مثبت. اذهب لصفحة 'النموذج'.")
-                        _chatHistory.value = currentHistory
-                        _isChatLoading.value = false
-                        return@launch
+                val am = getApplication<android.app.Application>().getSystemService(android.content.Context.ACTIVITY_SERVICE) as android.app.ActivityManager
+                val memInfo = android.app.ActivityManager.MemoryInfo()
+                am.getMemoryInfo(memInfo)
+                diag.AppendLine("ذاكرة متاحة: ${memInfo.availMem / (1024*1024)} MB")
+                diag.AppendLine("ذاكرة كلية: ${memInfo.totalMem / (1024*1024)} MB")
+
+                // Try reading log file
+                try {
+                    val logFile = java.io.File(
+                        getApplication<android.app.Application>().filesDir,
+                        "crash_log.txt"
+                    )
+                    if (logFile.exists()) {
+                        diag.AppendLine("--- سجل الأخطاء ---")
+                        diag.append(logFile.readText().take(500))
+                    } else {
+                        diag.AppendLine("سجل الأخطاء: غير موجود")
                     }
-
-                    if (!localLlm.hasEnoughRam()) {
-                        android.util.Log.w("VisionAI_VM", "Not enough RAM!")
-                        currentHistory.add("AI: ⚠️ ذاكرة غير كافية. أغلق التطبيقات.")
-                        _chatHistory.value = currentHistory
-                        _isChatLoading.value = false
-                        return@launch
-                    }
-
-                    currentHistory.add("AI: ⏳ جاري تحميل النموذج... (قد يستغرق 1-2 دقيقة)")
-                    _chatHistory.value = currentHistory
-
-                    android.util.Log.i("VisionAI_VM", "Calling localLlm.loadModel()...")
-                    val loaded = localLlm.loadModel()
-                    android.util.Log.i("VisionAI_VM", "loadModel returned: $loaded")
-
-                    if (!loaded) {
-                        val updated = _chatHistory.value.toMutableList()
-                        updated.removeLast()
-                        updated.add("AI: ⚠️ فشل تحميل النموذج. تأكد من:\n• حجم الملف (>500MB)\n• ذاكرة كافية\n• إغلاق التطبيقات الأخرى")
-                        _chatHistory.value = updated
-                        _isChatLoading.value = false
-                        return@launch
-                    }
-
-                    // Remove "loading" message
-                    val updated = _chatHistory.value.toMutableList()
-                    updated.removeLast()
-                    _chatHistory.value = updated
+                } catch (e: Exception) {
+                    diag.AppendLine("لا يمكن قراءة السجل: ${e.message}")
                 }
 
-                currentHistory.add("AI: 🤔 جاري التفكير...")
+                currentHistory.add("AI: $diag")
                 _chatHistory.value = currentHistory
 
-                android.util.Log.i("VisionAI_VM", "Calling localLlm.generate()...")
-                val prompt = buildChatPrompt(question, _lastAnalysisText.value)
-                val response = localLlm.generate(prompt)
-                android.util.Log.i("VisionAI_VM", "Generate result: ${response.take(100)}...")
-
-                val finalHistory = _chatHistory.value.toMutableList()
-                finalHistory.removeLast()
-                finalHistory.add("AI: $response")
-                _chatHistory.value = finalHistory
-
             } catch (e: Exception) {
-                android.util.Log.e("VisionAI_VM", "askLocalModel EXCEPTION: ${e.message}", e)
-                val errorHistory = _chatHistory.value.toMutableList()
-                if (errorHistory.lastOrNull()?.contains("جاري") == true) {
-                    errorHistory.removeLast()
-                }
-                errorHistory.add("AI: ❌ خطأ: ${e.message}")
-                _chatHistory.value = errorHistory
+                currentHistory.add("AI: خطأ: ${e.message}")
+                _chatHistory.value = currentHistory
             }
 
             _isChatLoading.value = false
         }
-             }
+                  }
+             
 
     // ═══ معالجة النتائج مباشرة ═══
         fun processResults(fullPrompt: String, shortLabel: String) {
