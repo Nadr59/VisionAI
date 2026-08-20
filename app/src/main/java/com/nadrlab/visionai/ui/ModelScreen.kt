@@ -19,6 +19,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.PhoneAndroid
 import androidx.compose.material3.Button
@@ -29,24 +30,27 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.nadrlab.visionai.ai.ModelDownloader
 import com.nadrlab.visionai.domain.ModelState
 import com.nadrlab.visionai.vm.MainViewModel
 import kotlinx.coroutines.launch
-import java.io.File
 
 @Composable
 fun ModelScreen(viewModel: MainViewModel) {
@@ -55,31 +59,15 @@ fun ModelScreen(viewModel: MainViewModel) {
     val dlState by downloader.state.collectAsState()
     val progress by downloader.progress.collectAsState()
     val statusMsg by downloader.statusMessage.collectAsState()
-    val memUsage by viewModel.localLlm.memUsage.collectAsState()
     val scope = rememberCoroutineScope()
 
-    // File picker for GGUF
+    var manualPath by remember { mutableStateOf("/storage/emulated/0/Download/Qwen3-1.7B-Q4_K_M.gguf") }
+
     val filePicker = rememberLauncherForActivityResult(
         ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
         uri?.let {
-            val inputStream = context.contentResolver.openInputStream(it)
-            if (inputStream != null) {
-                // Copy to temp then import
-                scope.launch {
-                    val tempFile = File(context.cacheDir, "import_temp.gguf")
-                    try {
-                        inputStream.use { input ->
-                            tempFile.outputStream().use { output ->
-                                input.copyTo(output, bufferSize = 65536)
-                            }
-                        }
-                        downloader.importFromFile(tempFile)
-                    } finally {
-                        tempFile.delete()
-                    }
-                }
-            }
+            scope.launch { downloader.importFromUri(it) }
         }
     }
 
@@ -93,201 +81,184 @@ fun ModelScreen(viewModel: MainViewModel) {
     ) {
         Text("إدارة النموذج المحلي", color = Color(0xFF38BDF8), fontSize = 22.sp, fontWeight = FontWeight.Bold)
 
-        // ═══ معلومات النموذج ═══
+        // ═══ معلومات ═══
         Card(
             colors = CardDefaults.cardColors(containerColor = Color(0xFF1A1A2E)),
             shape = RoundedCornerShape(14.dp)
         ) {
             Column(Modifier.padding(16.dp)) {
                 Text("النموذج الحالي", color = Color.Gray, fontSize = 12.sp)
-                Text(ModelDownloader.MODEL_FILENAME, color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                Text(ModelDownloader.MODEL_FILENAME, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold)
                 Spacer(Modifier.height(8.dp))
-                InfoRow("الحجم:", "${ModelDownloader.MODEL_SIZE_MB} MB")
+                InfoRow("الحجم المطلوب:", "~${ModelDownloader.MODEL_SIZE_MB} MB")
                 InfoRow("المساحة المتاحة:", "${downloader.getAvailableSpaceMb()} MB")
                 InfoRow("الحالة:", stateLabel(dlState), stateColor(dlState))
                 if (statusMsg.isNotBlank()) {
-                    Text(statusMsg, color = Color.Gray, fontSize = 11.sp, modifier = Modifier.padding(top = 4.dp))
-                }
-                if (memUsage > 0) {
-                    InfoRow("استخدام الذاكرة:", "${memUsage / (1024 * 1024)} MB")
+                    Text(statusMsg, color = Color(0xFF888888), fontSize = 11.sp, modifier = Modifier.padding(top = 4.dp))
                 }
             }
         }
 
         // ═══ شريط التقدم ═══
         if (dlState == ModelState.DOWNLOADING) {
-            LinearProgressIndicator(
-                progress = { progress },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(10.dp)
-                    .background(Color(0xFF1A1A2E), RoundedCornerShape(5.dp)),
-                color = Color(0xFF38BDF8),
-                trackColor = Color(0xFF1A1A2E)
-            )
-            Text("${(progress * 100).toInt()}%", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold)
-        }
-
-        // ═══ الأزرار ═══
-        when (dlState) {
-            ModelState.NOT_DOWNLOADED, ModelState.ERROR -> {
-
-                // تنبيه RAM
-                Card(
-                    colors = CardDefaults.cardColors(containerColor = Color(0xFF2A2A1A)),
-                    shape = RoundedCornerShape(10.dp)
-                ) {
-                    Column(Modifier.padding(14.dp)) {
-                        Text("💡 نصيحة", color = Color(0xFFE8C547), fontSize = 13.sp, fontWeight = FontWeight.Bold)
-                        Spacer(Modifier.height(4.dp))
-                        Text(
-                            "الأجهزة ذات الذاكرة المحدودة يُفضل تحميل النموذج من خلال المتصفح أو Termux ثم استيراده.",
-                            color = Color.Gray,
-                            fontSize = 12.sp
-                        )
-                        Spacer(Modifier.height(6.dp))
-                        Text(
-                            "الملف: Qwen3-1.7B-Q4_K_M.gguf\nمن: huggingface.co/unsloth/Qwen3-1.7B-GGUF",
-                            color = Color(0xFF888888),
-                            fontSize = 11.sp
-                        )
-                    }
-                }
-
-                // زر استيراد من الجهاز
-                Button(
-                    onClick = { filePicker.launch("*/*") },
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4CAF50)),
-                    shape = RoundedCornerShape(12.dp)
-                ) {
-                    Icon(Icons.Default.FolderOpen, contentDescription = null, tint = Color.White)
-                    Spacer(Modifier.width(8.dp))
-                    Column {
-                        Text("استيراد من الجهاز", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold)
-                        Text("اختر ملف GGUF من التحميلات", color = Color.White.copy(alpha = 0.7f), fontSize = 11.sp)
-                    }
-                }
-
-                // زر البحث التلقائي
-                Button(
-                    onClick = {
-                        scope.launch {
-                            val found = downloader.findModelOnDevice()
-                            if (found != null) {
-                                downloader.importFromFile(found)
-                            }
-                        }
-                    },
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1A3A5F)),
-                    shape = RoundedCornerShape(12.dp)
-                ) {
-                    Icon(Icons.Default.PhoneAndroid, contentDescription = null, tint = Color.White)
-                    Spacer(Modifier.width(8.dp))
-                    Text("بحث تلقائي عن النموذج", color = Color.White)
-                }
-
-                // زر تنزيل (قد يفشل بسبب RAM)
-                OutlinedButton(
-                    onClick = { scope.launch { downloader.download() } },
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(12.dp)
-                ) {
-                    Icon(Icons.Default.Download, contentDescription = null, tint = Color.Gray)
-                    Spacer(Modifier.width(8.dp))
-                    Text("تنزيل من الإنترنت (قد يفشل في الأجهزة المحدودة)", color = Color.Gray, fontSize = 12.sp)
-                }
-            }
-            ModelState.DOWNLOADING -> {
-                Button(
-                    onClick = { downloader.cancelDownload() },
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFF44336)),
-                    shape = RoundedCornerShape(12.dp)
-                ) {
-                    Text("إلغاء", color = Color.White)
-                }
-            }
-                        ModelState.READY -> {
-                Card(
-                    colors = CardDefaults.cardColors(containerColor = Color(0xFF1A2A1A)),
-                    shape = RoundedCornerShape(10.dp)
-                ) {
-                    Text(
-                        "✅ النموذج جاهز. سيتم تحميله تلقائياً عند الحاجة.",
-                        color = Color(0xFF4CAF50),
-                        fontSize = 13.sp,
-                        modifier = Modifier.padding(14.dp)
-                    )
-                }
-
-                OutlinedButton(
-                    onClick = { downloader.deleteModel() },
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(12.dp)
-                ) {
-                    Text("حذف النموذج", color = Color(0xFFF44336))
-                }
-                        }
-            ModelState.LOADING -> {
-                CircularProgressIndicator(
+            if (progress > 0f) {
+                LinearProgressIndicator(
+                    progress = { progress },
                     modifier = Modifier
-                        .size(32.dp)
-                        .align(Alignment.CenterHorizontally),
-                    color = Color(0xFF38BDF8)
+                        .fillMaxWidth()
+                        .height(8.dp)
+                        .background(Color(0xFF1A1A2E), RoundedCornerShape(4.dp)),
+                    color = Color(0xFF38BDF8),
+                    trackColor = Color(0xFF1A1A2E)
+                )
+                Text("${(progress * 100).toInt()}%", color = Color.White, fontSize = 13.sp)
+            } else {
+                LinearProgressIndicator(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(8.dp),
+                    color = Color(0xFF38BDF8),
+                    trackColor = Color(0xFF1A1A2E)
                 )
             }
-            ModelState.LOADED -> {
-                Card(
-                    colors = CardDefaults.cardColors(containerColor = Color(0xFF1A2A1A)),
-                    shape = RoundedCornerShape(10.dp)
-                ) {
-                    Text(
-                        "✅ النموذج مُحمّل ويعمل",
-                        color = Color(0xFF4CAF50),
-                        fontSize = 13.sp,
-                        modifier = Modifier.padding(14.dp)
-                    )
-                }
-                Button(
-                    onClick = { viewModel.localLlm.unloadModel() },
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF9800)),
-                    shape = RoundedCornerShape(12.dp)
-                ) {
-                    Text("إيقاف النموذج", color = Color.White)
-                }
+            Button(
+                onClick = { downloader.cancelDownload() },
+                modifier = Modifier.fillMaxWidth(),
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFF44336)),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Text("إلغاء", color = Color.White)
             }
         }
 
-        // ═══ طريقة التحميل اليدوي ═══
-        Card(
-            colors = CardDefaults.cardColors(containerColor = Color(0xFF1A1A2E)),
-            shape = RoundedCornerShape(14.dp)
-        ) {
-            Column(Modifier.padding(16.dp)) {
-                Text("📥 تحميل يدوي من Termux", color = Color(0xFFE8C547), fontSize = 13.sp, fontWeight = FontWeight.Bold)
-                Spacer(Modifier.height(8.dp))
-                Card(
-                    colors = CardDefaults.cardColors(containerColor = Color(0xFF0D0D0D)),
-                    shape = RoundedCornerShape(8.dp)
-                ) {
-                    Text(
-                        text = "cd ~/csv-files\nwget -c \"https://huggingface.co/unsloth/Qwen3-1.7B-GGUF/resolve/main/Qwen3-1.7B-Q4_K_M.gguf\"",
-                        color = Color(0xFF4CAF50),
-                        fontSize = 11.sp,
-                        modifier = Modifier.padding(10.dp),
-                        lineHeight = 16.sp
-                    )
+        // ═══ أزرار (عند عدم التثبيت) ═══
+        if (dlState == ModelState.NOT_DOWNLOADED || dlState == ModelState.ERROR) {
+
+            // نصيحة
+            Card(
+                colors = CardDefaults.cardColors(containerColor = Color(0xFF2A2A1A)),
+                shape = RoundedCornerShape(10.dp)
+            ) {
+                Column(Modifier.padding(14.dp)) {
+                    Text("💡 طريقة التحميل", color = Color(0xFFE8C547), fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                    Spacer(Modifier.height(6.dp))
+                    Text("1. حمّل الملف من المتصفح أو Termux", color = Color.Gray, fontSize = 12.sp)
+                    Text("2. استورده من هنا", color = Color.Gray, fontSize = 12.sp)
+                    Spacer(Modifier.height(4.dp))
+                    Text("الملف: $MODEL_FILENAME", color = Color(0xFF666666), fontSize = 10.sp)
                 }
-                Spacer(Modifier.height(6.dp))
+            }
+
+            // ═══ إدخال المسار يدوياً ═══
+            Card(
+                colors = CardDefaults.cardColors(containerColor = Color(0xFF1A1A2E)),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Column(Modifier.padding(14.dp)) {
+                    Text("📂 استيراد بالمسار", color = Color(0xFFE8C547), fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = manualPath,
+                        onValueChange = { manualPath = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text("مسار الملف", color = Color.Gray, fontSize = 12.sp) },
+                        placeholder = { Text("/storage/emulated/0/Download/...", color = Color(0xFF444444), fontSize = 11.sp) },
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedTextColor = Color.White,
+                            unfocusedTextColor = Color.White,
+                            focusedBorderColor = Color(0xFF38BDF8),
+                            unfocusedBorderColor = Color(0xFF333333),
+                            cursorColor = Color(0xFF38BDF8)
+                        ),
+                        shape = RoundedCornerShape(8.dp),
+                        singleLine = true
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Button(
+                        onClick = { scope.launch { downloader.importFromPath(manualPath) } },
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4CAF50)),
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Icon(Icons.Default.Edit, null, tint = Color.White, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("استيراد من المسار", color = Color.White, fontSize = 14.sp)
+                    }
+                }
+            }
+
+            // ═══ بحث تلقائي ═══
+            Button(
+                onClick = {
+                    scope.launch {
+                        val found = downloader.findModelOnDevice()
+                        if (found != null) {
+                            downloader.importFromPath(found.absolutePath)
+                        }
+                    }
+                },
+                modifier = Modifier.fillMaxWidth(),
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1A3A5F)),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Icon(Icons.Default.PhoneAndroid, null, tint = Color.White)
+                Spacer(Modifier.width(8.dp))
+                Text("بحث تلقائي عن النموذج", color = Color.White)
+            }
+
+            // ═══ استيراد من ملف ═══
+            OutlinedButton(
+                onClick = { filePicker.launch("*/*") },
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Icon(Icons.Default.FolderOpen, null, tint = Color.Gray)
+                Spacer(Modifier.width(8.dp))
+                Text("اختيار ملف من الجهاز", color = Color.Gray)
+            }
+
+            // ═══ تنزيل من الإنترنت ═══
+            OutlinedButton(
+                onClick = { scope.launch { downloader.download() } },
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Icon(Icons.Default.Download, null, tint = Color.Gray)
+                Spacer(Modifier.width(8.dp))
+                Text("تنزيل من الإنترنت (بطيء)", color = Color.Gray, fontSize = 12.sp)
+            }
+        }
+
+        // ═══ جاهز ═══
+        if (dlState == ModelState.READY || dlState == ModelState.LOADED) {
+            Card(
+                colors = CardDefaults.cardColors(containerColor = Color(0xFF1A2A1A)),
+                shape = RoundedCornerShape(10.dp)
+            ) {
                 Text(
-                    "ثم اضغط 'استيراد من الجهاز' واختر الملف من csv-files",
-                    color = Color.Gray,
-                    fontSize = 11.sp
+                    "✅ النموذج جاهز وسيُحمّل تلقائياً عند الحاجة",
+                    color = Color(0xFF4CAF50),
+                    fontSize = 13.sp,
+                    modifier = Modifier.padding(14.dp)
                 )
             }
+            OutlinedButton(
+                onClick = { downloader.deleteModel() },
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Text("حذف النموذج", color = Color(0xFFF44336))
+            }
+        }
+
+        // ═══ تحميل ═══
+        if (dlState == ModelState.LOADING) {
+            CircularProgressIndicator(
+                modifier = Modifier
+                    .size(32.dp)
+                    .align(Alignment.CenterHorizontally),
+                color = Color(0xFF38BDF8)
+            )
         }
 
         Spacer(Modifier.height(80.dp))
@@ -307,7 +278,7 @@ private fun stateLabel(state: ModelState): String = when (state) {
     ModelState.DOWNLOADING -> "جاري..."
     ModelState.READY -> "جاهز"
     ModelState.LOADING -> "جاري التحميل..."
-    ModelState.LOADED -> "مُحمّل و يعمل"
+    ModelState.LOADED -> "مُحمّل"
     ModelState.ERROR -> "خطأ"
 }
 
@@ -316,3 +287,5 @@ private fun stateColor(state: ModelState): Color = when (state) {
     ModelState.ERROR -> Color(0xFFF44336)
     else -> Color(0xFFFFC107)
 }
+
+private const val MODEL_FILENAME = ModelDownloader.MODEL_FILENAME
