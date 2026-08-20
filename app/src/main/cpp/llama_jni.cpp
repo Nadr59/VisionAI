@@ -1,147 +1,255 @@
 #include <jni.h>
-#include <string>
-#include <vector>
-#include <cstring>
 #include <android/log.h>
 #include "llama.h"
+#include <string>
+#include <vector>
+#include <mutex>
+#include <algorithm>
+#include <cstring>
 
 #define TAG "VJNI"
-#define LOGI(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
+#define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
 
-static llama_model *g_model = nullptr;
-static llama_context *g_ctx = nullptr;
+static llama_model    *g_model   = nullptr;
+static llama_context  *g_ctx     = nullptr;
+static llama_sampler  *g_sampler = nullptr;
 static const llama_vocab *g_vocab = nullptr;
-static bool g_loaded = false;
+static std::mutex g_mutex;
 
-// Helper: create batch for multiple tokens at given position
-static llama_batch make_batch(const llama_token *tokens, int n, int pos_start, bool all_logits) {
-    llama_batch batch = llama_batch_init(n, 0, 1);
-    for (int i = 0; i < n; i++) {
-        batch.token[i] = tokens[i];
-        batch.pos[i] = pos_start + i;
-        batch.n_seq_id[i] = 1;
-        batch.seq_id[i][0] = 0;
-        batch.logits[i] = all_logits ? 1 : (i == n - 1) ? 1 : 0;
-    }
-    batch.n_tokens = n;
-    return batch;
+// ═══════════════════════════════════════════
+// Helper: jstring → std::string
+// ═══════════════════════════════════════════
+static std::string j2s(JNIEnv *env, jstring js) {
+    if (!js) return "";
+    const char *c = env->GetStringUTFChars(js, nullptr);
+    if (!c) return "";
+    std::string s(c);
+    env->ReleaseStringUTFChars(js, c);
+    return s;
 }
 
+// ═══════════════════════════════════════════
+// nativeLoadModel(path, contextSize, threads)
+// ═══════════════════════════════════════════
 extern "C" JNIEXPORT jboolean JNICALL
 Java_com_nadrlab_visionai_ai_LocalLlmManager_nativeLoadModel(
-    JNIEnv *env, jobject, jstring jpath, jint ctx_size, jint threads)
+    JNIEnv *env, jobject,
+    jstring jpath, jint ctxSize, jint threads)
 {
-    const char *path = env->GetStringUTFChars(jpath, nullptr);
-    LOGI("LOAD: %s ctx=%d th=%d", path, ctx_size, threads);
+    std::lock_guard<std::mutex> lock(g_mutex);
 
-    if (g_loaded) {
-        if (g_ctx) llama_free(g_ctx);
-        if (g_model) llama_model_free(g_model);
-        g_ctx = nullptr; g_model = nullptr; g_vocab = nullptr; g_loaded = false;
-    }
+    std::string path = j2s(env, jpath);
+    LOGI("LOAD: %s ctx=%d th=%d", path.c_str(), ctxSize, threads);
 
+    if (path.empty()) { LOGE("Path empty"); return JNI_FALSE; }
+
+    // Free old
+    if (g_sampler) { llama_sampler_free(g_sampler); g_sampler = nullptr; }
+    if (g_ctx)     { llama_free(g_ctx);              g_ctx     = nullptr; }
+    if (g_model)   { llama_model_free(g_model);      g_model   = nullptr; }
+    g_vocab = nullptr;
+
+    // Backend init
+    llama_backend_init();
+
+    // Load model
     auto mp = llama_model_default_params();
     mp.n_gpu_layers = 0;
-    g_model = llama_model_load_from_file(path, mp);
-    env->ReleaseStringUTFChars(jpath, path);
+
+    LOGI("Loading model file...");
+    g_model = llama_model_load_from_file(path.c_str(), mp);
     if (!g_model) { LOGE("Model FAIL"); return JNI_FALSE; }
+    LOGI("Model OK");
 
     g_vocab = llama_model_get_vocab(g_model);
     if (!g_vocab) { LOGE("Vocab FAIL"); llama_model_free(g_model); g_model = nullptr; return JNI_FALSE; }
 
+    // Context
     auto cp = llama_context_default_params();
-    cp.n_ctx = (uint32_t)ctx_size;
-    cp.n_batch = (uint32_t)ctx_size;
-    cp.n_threads = (uint32_t)threads;
+    cp.n_ctx          = (uint32_t)std::max(256, (int)ctxSize);
+    cp.n_batch        = cp.n_ctx;
+    cp.n_threads      = (uint32_t)threads;
     cp.n_threads_batch = (uint32_t)threads;
 
+    LOGI("Creating context n_ctx=%u n_batch=%u threads=%u", cp.n_ctx, cp.n_batch, cp.n_threads);
     g_ctx = llama_init_from_model(g_model, cp);
     if (!g_ctx) { LOGE("Ctx FAIL"); llama_model_free(g_model); g_model = nullptr; g_vocab = nullptr; return JNI_FALSE; }
 
-    g_loaded = true;
-    LOGI("LOAD OK");
+    // Sampler (persistent)
+    auto sp = llama_sampler_chain_default_params();
+    g_sampler = llama_sampler_chain_init(sp);
+    llama_sampler_chain_add(g_sampler, llama_sampler_init_top_k(40));
+    llama_sampler_chain_add(g_sampler, llama_sampler_init_top_p(0.90f, 1));
+    llama_sampler_chain_add(g_sampler, llama_sampler_init_temp(0.70f));
+    llama_sampler_chain_add(g_sampler, llama_sampler_init_dist(1234));
+
+    LOGI("=== LOAD COMPLETE ===");
     return JNI_TRUE;
 }
 
+// ═══════════════════════════════════════════
+// nativeGenerate(prompt, maxTokens, temp, topP, topK, callback)
+// ═══════════════════════════════════════════
 extern "C" JNIEXPORT jstring JNICALL
 Java_com_nadrlab_visionai_ai_LocalLlmManager_nativeGenerate(
-    JNIEnv *env, jobject, jstring jprompt, jint max_tok,
-    jfloat temp, jfloat top_p, jint top_k, jobject)
+    JNIEnv *env, jobject,
+    jstring jprompt, jint maxTokens,
+    jfloat temp, jfloat topP, jint topK,
+    jobject /* callback */)
 {
-    if (!g_loaded) return env->NewStringUTF("النموذج غير محمّل");
+    std::lock_guard<std::mutex> lock(g_mutex);
 
-    const char *raw = env->GetStringUTFChars(jprompt, nullptr);
-    std::string prompt(raw);
-    env->ReleaseStringUTFChars(jprompt, raw);
-    LOGI("GEN: %d chars, max=%d", (int)prompt.size(), max_tok);
+    if (!g_model || !g_ctx || !g_vocab || !g_sampler) {
+        LOGE("Not initialized");
+        return env->NewStringUTF("النموذج غير جاهز");
+    }
+
+    std::string prompt = j2s(env, jprompt);
+    LOGI("GEN: %zu chars, max=%d", prompt.size(), maxTokens);
+
+    if (prompt.empty()) {
+        LOGE("Prompt empty");
+        return env->NewStringUTF("النص فارغ");
+    }
+
+    // ═══ Clear KV cache + reset sampler ═══
+    llama_memory_clear(llama_get_memory(g_ctx), true);
+    llama_sampler_reset(g_sampler);
 
     // ═══ Tokenize ═══
-    int n_tok = llama_tokenize(g_vocab, prompt.c_str(), (int)prompt.size(), nullptr, 0, true, false);
-    if (n_tok <= 0) { LOGE("Tok cnt: %d", n_tok); return env->NewStringUTF("خطأ في تحليل النص"); }
+    // Official way: first call returns NEGATIVE count
+    int32_t n_prompt = -llama_tokenize(
+        g_vocab,
+        prompt.c_str(),
+        (int32_t)prompt.size(),
+        nullptr,
+        0,
+        true,
+        true
+    );
 
-    std::vector<llama_token> toks(n_tok);
-    n_tok = llama_tokenize(g_vocab, prompt.c_str(), (int)prompt.size(), toks.data(), n_tok, true, false);
-    if (n_tok <= 0) { LOGE("Tok fill: %d", n_tok); return env->NewStringUTF("خطأ في تحليل النص"); }
-    LOGI("Tokens: %d", n_tok);
+    LOGI("Required tokens: %d", n_prompt);
+
+    if (n_prompt <= 0) {
+        LOGE("Tokenize count failed: %d", n_prompt);
+        return env->NewStringUTF("خطأ في تحليل النص");
+    }
+
+    // Check context size
+    int32_t n_ctx = (int32_t)llama_n_ctx(g_ctx);
+    if (n_prompt >= n_ctx) {
+        LOGE("Prompt too long: %d >= ctx %d", n_prompt, n_ctx);
+        return env->NewStringUTF("النص أطول من سعة الذاكرة");
+    }
+
+    // Fill tokens
+    std::vector<llama_token> tokens(n_prompt);
+    int32_t tokenized = llama_tokenize(
+        g_vocab,
+        prompt.c_str(),
+        (int32_t)prompt.size(),
+        tokens.data(),
+        n_prompt,
+        true,
+        true
+    );
+
+    if (tokenized < 0) {
+        LOGE("Tokenize fill failed: %d", tokenized);
+        return env->NewStringUTF("خطأ في تحليل النص");
+    }
+
+    if (tokenized != n_prompt) {
+        LOGI("Token count adjusted: %d -> %d", n_prompt, tokenized);
+        tokens.resize(tokenized);
+        n_prompt = tokenized;
+    }
+
+    LOGI("Tokenized OK: %d tokens", n_prompt);
+
+    // Print first few tokens for debug
+    for (int i = 0; i < std::min(n_prompt, 5); i++) {
+        LOGI("  tok[%d] = %d", i, (int)tokens[i]);
+    }
 
     // ═══ Decode prompt ═══
+    llama_batch batch = llama_batch_get_one(tokens.data(), n_prompt);
     LOGI("Decoding prompt...");
-    {
-        llama_batch batch = make_batch(toks.data(), n_tok, 0, false);
-        int r = llama_decode(g_ctx, batch);
-        llama_batch_free(batch);
-        if (r != 0) { LOGE("Prompt decode: %d", r); return env->NewStringUTF("خطأ في معالجة النص"); }
-    }
-    LOGI("Prompt OK");
 
-    // ═══ Sampler ═══
-    auto sp = llama_sampler_chain_default_params();
-    llama_sampler *smplr = llama_sampler_chain_init(sp);
-    llama_sampler_chain_add(smplr, llama_sampler_init_temp(temp > 0.01f ? temp : 0.7f));
-    llama_sampler_chain_add(smplr, llama_sampler_init_top_p(top_p > 0.01f ? top_p : 0.9f, 1));
-    llama_sampler_chain_add(smplr, llama_sampler_init_top_k(top_k > 0 ? top_k : 40));
-    llama_sampler_chain_add(smplr, llama_sampler_init_dist(0));
+    int32_t dr = llama_decode(g_ctx, batch);
+    LOGI("Prompt decode result: %d", dr);
+
+    if (dr != 0) {
+        LOGE("Prompt decode FAILED: %d", dr);
+        return env->NewStringUTF("خطأ في معالجة النص");
+    }
+    LOGI("Prompt decoded OK");
 
     // ═══ Generate ═══
-    std::string result;
-    int gen = 0;
-    int pos = n_tok;
+    int32_t limit = std::max(1, std::min((int32_t)maxTokens, n_ctx - n_prompt - 1));
+    LOGI("Generate limit: %d tokens", limit);
 
-    for (int i = 0; i < (int)max_tok; i++) {
-        llama_token tok = llama_sampler_sample(smplr, g_ctx, -1);
+    std::string output;
+    output.reserve(limit * 4);
 
-        if (llama_vocab_is_eog(g_vocab, tok)) { LOGI("EOS@%d", gen); break; }
+    for (int32_t i = 0; i < limit; i++) {
+        llama_token tok = llama_sampler_sample(g_sampler, g_ctx, -1);
 
-        char buf[256];
-        int len = llama_token_to_piece(g_vocab, tok, buf, sizeof(buf), 0, true);
-        if (len > 0) { result.append(buf, len); gen++; }
+        if (llama_vocab_is_eog(g_vocab, tok)) {
+            LOGI("EOG at token %d", i);
+            break;
+        }
 
-        // Feed next token
-        llama_batch batch = make_batch(&tok, 1, pos, true);
-        pos++;
-        int r = llama_decode(g_ctx, batch);
-        llama_batch_free(batch);
-        if (r != 0) { LOGE("Gen@%d: %d", i, r); break; }
+        char buf[512];
+        int32_t len = llama_token_to_piece(g_vocab, tok, buf, sizeof(buf), 0, true);
+        if (len < 0) {
+            LOGE("token_to_piece fail: tok=%d err=%d", (int)tok, len);
+            break;
+        }
+        if (len > 0) {
+            output.append(buf, len);
+        }
 
-        if (gen % 10 == 0 && gen > 0) LOGI("..%d", gen);
+        // Next token
+        batch = llama_batch_get_one(&tok, 1);
+        dr = llama_decode(g_ctx, batch);
+        if (dr != 0) {
+            LOGE("Gen decode fail at %d: %d", i, dr);
+            break;
+        }
+
+        if ((i + 1) % 10 == 0) {
+            LOGI("..%d tokens generated", i + 1);
+        }
     }
 
-    llama_sampler_free(smplr);
-    LOGI("DONE: %d tok, %d chr", gen, (int)result.size());
-    if (result.empty()) return env->NewStringUTF("النموذج لم يُنتج رداً");
-    return env->NewStringUTF(result.c_str());
+    LOGI("DONE: %zu chars", output.size());
+
+    if (output.empty()) {
+        return env->NewStringUTF("النموذج لم يُنتج رداً");
+    }
+    return env->NewStringUTF(output.c_str());
 }
 
+// ═══════════════════════════════════════════
+// nativeGetMemUsage()
+// ═══════════════════════════════════════════
 extern "C" JNIEXPORT jlong JNICALL
 Java_com_nadrlab_visionai_ai_LocalLlmManager_nativeGetMemUsage(JNIEnv *, jobject) {
     return g_ctx ? (jlong)llama_state_get_size(g_ctx) : 0;
 }
 
+// ═══════════════════════════════════════════
+// nativeUnload()
+// ═══════════════════════════════════════════
 extern "C" JNIEXPORT void JNICALL
 Java_com_nadrlab_visionai_ai_LocalLlmManager_nativeUnload(JNIEnv *, jobject) {
-    if (g_ctx) llama_free(g_ctx);
-    if (g_model) llama_model_free(g_model);
-    g_ctx = nullptr; g_model = nullptr; g_vocab = nullptr; g_loaded = false;
+    std::lock_guard<std::mutex> lock(g_mutex);
+    if (g_sampler) { llama_sampler_free(g_sampler); g_sampler = nullptr; }
+    if (g_ctx)     { llama_free(g_ctx);              g_ctx     = nullptr; }
+    if (g_model)   { llama_model_free(g_model);      g_model   = nullptr; }
+    g_vocab = nullptr;
+    llama_backend_free();
     LOGI("UNLOADED");
 }
