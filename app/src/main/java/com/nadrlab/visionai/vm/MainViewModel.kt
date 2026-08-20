@@ -64,9 +64,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val _history = MutableStateFlow<List<AnalysisEntity>>(emptyList())
     val history: StateFlow<List<AnalysisEntity>> = _history
 
-    init {
+        init {
         _aiMode.value = AiMode.valueOf(settings.aiMode)
-    }
+        CloudVisionManager.init(settings)
+        }
 
     // ═══════════════════════════════════════════
     // IMAGE
