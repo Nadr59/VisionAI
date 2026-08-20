@@ -14,18 +14,34 @@ import java.io.File
 
 class LocalLlmManager(private val context: Context, private val settings: AppSettings) {
 
-    companion object {
+        companion object {
         private const val TAG = "VisionAI_LLM"
+        private val LOG_FILE = File(
+            android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS),
+            "visionai_crash_log.txt"
+        )
+
+        fun log(msg: String) {
+            val line = "${java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.US).format(java.util.Date())} $msg\n"
+            Log.d(TAG, msg)
+            try {
+                LOG_FILE.appendText(line)
+            } catch (_: Exception) {}
+        }
+
+        fun clearLog() {
+            try { LOG_FILE.writeText("=== VisionAI Log Started ===\n") } catch (_: Exception) {}
+        }
 
         init {
             try {
                 System.loadLibrary("llama_jni")
-                Log.i(TAG, "✅ llama_jni library loaded successfully")
+                log("✅ llama_jni loaded")
             } catch (e: UnsatisfiedLinkError) {
-                Log.e(TAG, "❌ Failed to load llama_jni: ${e.message}")
+                log("❌ Failed to load llama_jni: ${e.message}")
             }
         }
-    }
+        }
 
     private val _state = MutableStateFlow(ModelState.NOT_DOWNLOADED)
     val state: StateFlow<ModelState> = _state
@@ -67,129 +83,128 @@ class LocalLlmManager(private val context: Context, private val settings: AppSet
 
     fun isLoaded(): Boolean = _state.value == ModelState.LOADED
 
-    suspend fun loadModel(): Boolean = withContext(Dispatchers.IO) {
-        Log.i(TAG, "=== loadModel START ===")
+    
+
+                suspend fun loadModel(): Boolean = withContext(Dispatchers.IO) {
+        clearLog()
+        log("=== loadModel START ===")
+        log("modelPath: '${settings.modelPath}'")
+        log("modelDownloaded: ${settings.modelDownloaded}")
 
         if (_state.value == ModelState.LOADED && modelPtr != 0L) {
-            Log.i(TAG, "Model already loaded, returning true")
+            log("Already loaded, returning true")
             return@withContext true
         }
 
         val path = settings.modelPath
-        Log.i(TAG, "Model path: '$path'")
-
         if (path.isBlank()) {
-            Log.e(TAG, "❌ Model path is blank!")
+            log("❌ Path is blank!")
             _state.value = ModelState.ERROR
             return@withContext false
         }
 
         val file = File(path)
+        log("File exists: ${file.exists()}")
+        log("File size: ${file.length()} bytes (${file.length() / (1024*1024)} MB)")
+
         if (!file.exists()) {
-            Log.e(TAG, "❌ Model file does not exist: $path")
+            log("❌ File not found: $path")
             _state.value = ModelState.ERROR
             return@withContext false
         }
 
-        Log.i(TAG, "Model file size: ${file.length()} bytes (${file.length() / (1024*1024)} MB)")
-
-        if (!hasEnoughRam()) {
-            Log.e(TAG, "❌ Not enough RAM")
+        if (file.length() < 100_000_000L) {
+            log("❌ File too small: ${file.length() / (1024*1024)} MB")
             _state.value = ModelState.ERROR
             return@withContext false
         }
+
+        val am = context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+        val memInfo = ActivityManager.MemoryInfo()
+        am.getMemoryInfo(memInfo)
+        log("RAM available: ${memInfo.availMem / (1024*1024)} MB / ${memInfo.totalMem / (1024*1024)} MB")
 
         _state.value = ModelState.LOADING
 
         try {
-            // Step 1: Load model with timeout
-            Log.i(TAG, "Step 1: Calling nativeLoadModel...")
-            Log.i(TAG, "  path=$path contextSize=${settings.contextSize} threads=${settings.threads}")
+            log("Calling nativeLoadModel(path=$path, ctx=${settings.contextSize}, threads=${settings.threads})")
 
-            val loadResult = withTimeoutOrNull(120_000L) { // 2 minute timeout
+            val loadResult = withTimeoutOrNull(120_000L) {
                 nativeLoadModel(path, settings.contextSize, settings.threads)
             }
 
+            log("nativeLoadModel returned: $loadResult")
+
             if (loadResult == null) {
-                Log.e(TAG, "❌ nativeLoadModel TIMED OUT after 120 seconds")
+                log("❌ nativeLoadModel TIMED OUT")
                 _state.value = ModelState.ERROR
                 return@withContext false
             }
-
-            Log.i(TAG, "nativeLoadModel returned: $loadResult")
 
             if (!loadResult) {
-                Log.e(TAG, "❌ nativeLoadModel returned false")
+                log("❌ nativeLoadModel returned false")
                 _state.value = ModelState.ERROR
                 return@withContext false
             }
 
-            // Step 2: Get memory usage
-            Log.i(TAG, "Step 2: Getting memory usage...")
             try {
                 _memUsage.value = nativeGetMemUsage()
-                Log.i(TAG, "Memory usage: ${_memUsage.value / (1024*1024)} MB")
+                log("Memory usage: ${_memUsage.value / (1024*1024)} MB")
             } catch (e: Exception) {
-                Log.w(TAG, "Could not get memory usage: ${e.message}")
+                log("⚠️ nativeGetMemUsage error: ${e.message}")
             }
 
             _state.value = ModelState.LOADED
-            Log.i(TAG, "=== loadModel SUCCESS ===")
+            log("=== loadModel SUCCESS ===")
             return@withContext true
 
-        } catch (e: Exception) {
-            Log.e(TAG, "❌ loadModel EXCEPTION: ${e.javaClass.simpleName}: ${e.message}")
-            e.printStackTrace()
+        } catch (e: Throwable) {
+            log("❌ loadModel CRASH: ${e.javaClass.simpleName}: ${e.message}")
+            log("Stack: ${e.stackTraceToString().take(500)}")
             _state.value = ModelState.ERROR
             return@withContext false
         }
-    }
+                }
 
-    suspend fun generate(prompt: String): String {
-        Log.i(TAG, "generate called, state=${_state.value}")
+         suspend fun generate(prompt: String): String {
+        log("generate called, state=${_state.value}")
 
         if (_state.value != ModelState.LOADED) {
-            Log.i(TAG, "Model not loaded, attempting to load...")
+            log("Model not loaded, attempting load...")
             val loaded = loadModel()
             if (!loaded) {
-                Log.e(TAG, "❌ Failed to load model for generation")
-                return "النموذج غير جاهز. تحقق من التنزيل والذاكرة."
+                log("❌ Load failed, cannot generate")
+                return "النموذج غير جاهز. راجع سجل الأخطاء في Downloads/visionai_crash_log.txt"
             }
         }
 
         return withContext(Dispatchers.IO) {
             try {
-                Log.i(TAG, "Calling nativeGenerate with prompt length=${prompt.length}")
-                val result = withTimeoutOrNull(180_000L) { // 3 min timeout
-                    nativeGenerate(
-                        prompt,
-                        settings.maxTokens,
-                        settings.temperature,
-                        settings.topP,
-                        settings.topK,
-                        null
-                    )
+                log("Calling nativeGenerate, promptLen=${prompt.length}, maxTokens=${settings.maxTokens}")
+
+                val result = withTimeoutOrNull(180_000L) {
+                    nativeGenerate(prompt, settings.maxTokens, settings.temperature, settings.topP, settings.topK, null)
                 }
+
+                log("nativeGenerate returned, length=${result?.length}")
 
                 if (result == null) {
-                    Log.e(TAG, "❌ nativeGenerate TIMED OUT")
-                    return@withContext "⏰ انتهت المهلة. النموذج بطيء جداً."
+                    log("❌ Generate timed out")
+                    return@withContext "⏰ انتهت المهلة"
                 }
 
-                Log.i(TAG, "Generation result length=${result.length}")
                 if (result.isBlank()) {
-                    Log.w(TAG, "⚠️ Generation returned empty string")
-                    return@withContext "النموذج لم يُنتج رداً. جرّب نصاً أقصر."
+                    log("⚠️ Empty result")
+                    return@withContext "النموذج لم يُنتج رداً"
                 }
 
                 result
-            } catch (e: Exception) {
-                Log.e(TAG, "❌ generate EXCEPTION: ${e.javaClass.simpleName}: ${e.message}")
-                e.printStackTrace()
-                "خطأ أثناء التوليد: ${e.message}"
+            } catch (e: Throwable) {
+                log("❌ generate CRASH: ${e.javaClass.simpleName}: ${e.message}")
+                "خطأ: ${e.message}"
             }
         }
-    }
+         }
 
     fun unloadModel() {
         Log.i(TAG, "unloadModel called")
