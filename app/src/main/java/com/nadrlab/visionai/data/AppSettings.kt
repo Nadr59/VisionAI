@@ -53,6 +53,17 @@ class AppSettings(context: Context) {
     var modelPath: String
         get() = prefs.getString("model_path", "") ?: ""
         set(v) = prefs.edit().putString("model_path", v).apply()
+            var zenmuxKey: String
+        get() = prefs.getString("zenmux_key", "") ?: ""
+        set(value) = prefs.edit().putString("zenmux_key", value).apply()
+
+    var zenmuxModel: String
+        get() = prefs.getString("zenmux_model", "z-ai/glm-5.3-free") ?: "z-ai/glm-5.3-free"
+        set(value) = prefs.edit().putString("zenmux_model", value).apply()
+
+    var zenmuxUrl: String
+        get() = prefs.getString("zenmux_url", "https://zenmux.ai/api/chat/completions") ?: "https://zenmux.ai/api/chat/completions"
+        set(value) = prefs.edit().putString("zenmux_url", value).apply()
 
     var modelDownloaded: Boolean
         get() = prefs.getBoolean("model_downloaded", false)
