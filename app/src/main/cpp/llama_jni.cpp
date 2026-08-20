@@ -2,205 +2,188 @@
 #include <string>
 #include <vector>
 #include <android/log.h>
-#include "llama.h"
+#include "llama.cpp/include/llama.h"
+#include "llama.cpp/common/common.h"
 
-#define TAG "LlamaJNI"
+#define TAG "VisionAI_JNI"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
 
-struct LlamaSession {
-    llama_model* model = nullptr;
-    llama_context* ctx = nullptr;
-    const llama_vocab* vocab = nullptr;
-    bool is_loaded = false;
-};
+static llama_model *g_model = nullptr;
+static llama_context *g_ctx = nullptr;
+static bool g_is_loaded = false;
 
-static LlamaSession g_session;
-
-// ═══ Manual batch add (replaces common_batch_add) ═══
-static void batch_add(llama_batch& batch, llama_token token, int pos, bool generate_logits) {
-    batch.token[batch.n_tokens] = token;
-    batch.pos[batch.n_tokens] = pos;
-    batch.n_seq_id[batch.n_tokens] = 1;
-    batch.seq_id[batch.n_tokens][0] = 0;
-    batch.logits[batch.n_tokens] = generate_logits ? 1 : 0;
-    batch.n_tokens++;
-}
-
-extern "C" {
-
-JNIEXPORT jboolean JNICALL
+// ═══ nativeLoadModel ═══
+extern "C" JNIEXPORT jboolean JNICALL
 Java_com_nadrlab_visionai_ai_LocalLlmManager_nativeLoadModel(
-    JNIEnv* env, jobject /* this */,
-    jstring modelPath, jint contextSize, jint threads) {
+    JNIEnv *env, jobject thiz,
+    jstring jpath, jint context_size, jint threads)
+{
+    const char *path = env->GetStringUTFChars(jpath, nullptr);
+    LOGI("nativeLoadModel: path=%s ctx=%d threads=%d", path, context_size, threads);
 
-    const char* path = env->GetStringUTFChars(modelPath, nullptr);
-    LOGI("Loading model: %s ctx=%d threads=%d", path, contextSize, threads);
-
-    if (g_session.is_loaded) {
-        if (g_session.ctx) llama_free(g_session.ctx);
-        if (g_session.model) llama_model_free(g_session.model);
-        g_session.is_loaded = false;
+    // Unload previous
+    if (g_is_loaded) {
+        if (g_ctx) llama_free(g_ctx);
+        if (g_model) llama_model_free(g_model);
+        g_ctx = nullptr;
+        g_model = nullptr;
+        g_is_loaded = false;
     }
 
-    llama_model_params mparams = llama_model_default_params();
-    mparams.n_gpu_layers = 0;
+    // Model params
+    llama_model_params model_params = llama_model_default_params();
+    model_params.n_gpu_layers = 0; // CPU only
 
-    g_session.model = llama_model_load_from_file(path, mparams);
-    env->ReleaseStringUTFChars(modelPath, path);
+    LOGI("Loading model...");
+    g_model = llama_model_load_from_file(path, model_params);
+    env->ReleaseStringUTFChars(jpath, path);
 
-    if (!g_session.model) {
-        LOGE("Failed to load model");
+    if (!g_model) {
+        LOGE("Failed to load model!");
+        return JNI_FALSE;
+    }
+    LOGI("Model loaded OK");
+
+    // Context params
+    llama_context_params ctx_params = llama_context_default_params();
+    ctx_params.n_ctx = context_size;
+    ctx_params.n_batch = 512;
+    ctx_params.n_threads = threads;
+    ctx_params.n_threads_batch = threads;
+
+    LOGI("Creating context...");
+    g_ctx = llama_init_from_model(g_model, ctx_params);
+
+    if (!g_ctx) {
+        LOGE("Failed to create context!");
+        llama_model_free(g_model);
+        g_model = nullptr;
         return JNI_FALSE;
     }
 
-    llama_context_params cparams = llama_context_default_params();
-    cparams.n_ctx = contextSize;
-    cparams.n_threads = threads;
-    cparams.n_threads_batch = threads;
-
-    g_session.ctx = llama_init_from_model(g_session.model, cparams);
-    if (!g_session.ctx) {
-        LOGE("Failed to create context");
-        llama_model_free(g_session.model);
-        g_session.model = nullptr;
-        return JNI_FALSE;
-    }
-
-    g_session.vocab = llama_model_get_vocab(g_session.model);
-    g_session.is_loaded = true;
-
-    LOGI("Model loaded successfully");
+    g_is_loaded = true;
+    LOGI("Model and context ready!");
     return JNI_TRUE;
 }
 
-JNIEXPORT jstring JNICALL
+// ═══ nativeGenerate ═══
+extern "C" JNIEXPORT jstring JNICALL
 Java_com_nadrlab_visionai_ai_LocalLlmManager_nativeGenerate(
-    JNIEnv* env, jobject /* this */,
-    jstring prompt, jint maxTokens, jfloat temperature,
-    jfloat topP, jint topK, jobject callback) {
-
-    if (!g_session.is_loaded) {
-        LOGE("Model not loaded");
-        return env->NewStringUTF("");
+    JNIEnv *env, jobject thiz,
+    jstring jprompt, jint max_tokens,
+    jfloat temperature, jfloat top_p, jint top_k,
+    jobject callback)
+{
+    if (!g_is_loaded || !g_ctx || !g_model) {
+        LOGE("Model not loaded!");
+        return env->NewStringUTF("النموذج غير محمّل");
     }
 
-    const char* promptStr = env->GetStringUTFChars(prompt, nullptr);
-    std::string promptText(promptStr);
-    env->ReleaseStringUTFChars(prompt, promptStr);
+    const char *prompt = env->GetStringUTFChars(jprompt, nullptr);
+    LOGI("Generate: prompt=%d chars, maxTokens=%d", (int)strlen(prompt), max_tokens);
 
     // Tokenize
-    std::vector<llama_token> tokens(promptText.size() + 512);
-    int n_tokens = llama_tokenize(
-        g_session.vocab,
-        promptText.c_str(), promptText.size(),
-        tokens.data(), tokens.size(),
-        true, true
-    );
+    const llama_vocab *vocab = llama_model_get_vocab(g_model);
+    int n_prompt = -llama_tokenize(vocab, prompt, strlen(prompt), nullptr, 0, true, true);
+    std::vector<llama_token> prompt_tokens(n_prompt);
+    llama_tokenize(vocab, prompt, strlen(prompt), prompt_tokens.data(), n_prompt, true, true);
+    env->ReleaseStringUTFChars(jprompt, prompt);
 
-    if (n_tokens < 0) {
-        LOGE("Tokenization failed");
-        return env->NewStringUTF("");
-    }
-    tokens.resize(n_tokens);
-
-    // Clear KV cache
-    llama_memory_clear(llama_get_memory(g_session.ctx), false);
+    LOGI("Prompt tokens: %d", n_prompt);
 
     // Create batch
-    llama_batch batch = llama_batch_init(n_tokens + maxTokens, 0, 1);
-    for (int i = 0; i < n_tokens; i++) {
-        batch.token[i] = tokens[i];
-        batch.pos[i] = i;
-        batch.n_seq_id[i] = 1;
-        batch.seq_id[i][0] = 0;
-        batch.logits[i] = (i == n_tokens - 1) ? 1 : 0;
-    }
-    batch.n_tokens = n_tokens;
+    llama_batch batch = llama_batch_init(n_prompt, 0, 1);
 
-    // Decode prompt
-    if (llama_decode(g_session.ctx, batch) != 0) {
-        LOGE("Prompt decode failed");
-        llama_batch_free(batch);
-        return env->NewStringUTF("");
+    // Evaluate prompt
+    for (int i = 0; i < n_prompt; i++) {
+        batch.token[batch.n_tokens] = prompt_tokens[i];
+        batch.pos[batch.n_tokens] = i;
+        batch.n_tokens = 1;
+        batch.logits[i == n_prompt - 1] = 1;
+        if (llama_decode(g_ctx, batch) != 0) {
+            LOGE("Failed to decode prompt at token %d", i);
+            llama_batch_free(batch);
+            return env->NewStringUTF("خطأ في معالجة النص");
+        }
     }
 
     // Sampler
-    llama_sampler* sampler = llama_sampler_chain_init(llama_sampler_chain_default_params());
-    llama_sampler_chain_add(sampler, llama_sampler_init_temp(temperature));
-    llama_sampler_chain_add(sampler, llama_sampler_init_top_p(topP, 1));
-    llama_sampler_chain_add(sampler, llama_sampler_init_min_p(0.05f, 1));
+    llama_sampler *sampler = llama_sampler_chain_init(llama_sampler_chain_default_params());
+    if (temperature > 0.01f) {
+        llama_sampler_chain_add(sampler, llama_sampler_init_temp(temperature));
+        llama_sampler_chain_add(sampler, llama_sampler_init_top_p(top_p, 1));
+        llama_sampler_chain_add(sampler, llama_sampler_init_top_k(top_k));
+    }
     llama_sampler_chain_add(sampler, llama_sampler_init_dist(42));
 
-    // Get callback method
-    jclass callbackClass = env->GetObjectClass(callback);
-    jmethodID onTokenMethod = env->GetMethodID(callbackClass, "onToken", "(Ljava/lang/String;)V");
-
+    // Generate tokens
     std::string result;
     int n_generated = 0;
     llama_token new_token;
 
-    while (n_generated < maxTokens) {
-        new_token = llama_sampler_sample(sampler, g_session.ctx, -1);
+    for (int i = 0; i < max_tokens; i++) {
+        new_token = llama_sampler_sample(sampler, g_ctx, -1);
 
-        if (llama_vocab_is_eog(g_session.vocab, new_token)) break;
-
-        // Get token text
-        char buf[256];
-        int len = llama_token_to_piece(g_session.vocab, new_token, buf, sizeof(buf), 0, true);
-        if (len > 0) {
-            std::string tokenStr(buf, len);
-            result += tokenStr;
-
-            jstring jToken = env->NewStringUTF(tokenStr.c_str());
-            env->CallVoidMethod(callback, onTokenMethod, jToken);
-            env->DeleteLocalRef(jToken);
-        }
-
-        // Prepare next token
-        batch.n_tokens = 0;
-        batch_add(batch, new_token, n_tokens + n_generated, true);
-
-        if (llama_decode(g_session.ctx, batch) != 0) {
-            LOGE("Decode failed at token %d", n_generated);
+        // Check EOS
+        if (llama_vocab_is_eog(vocab, new_token)) {
+            LOGI("EOS reached at token %d", n_generated);
             break;
         }
 
-        n_generated++;
+        // Convert token to text
+        char buf[256];
+        int len = llama_token_to_piece(vocab, new_token, buf, sizeof(buf), 0, true);
+        if (len > 0) {
+            result.append(buf, len);
+            n_generated++;
+        }
+
+        // Prepare next batch
+        batch.n_tokens = 0;
+        batch.token[batch.n_tokens] = new_token;
+        batch.pos[batch.n_tokens] = n_prompt + n_generated - 1;
+        batch.n_tokens = 1;
+        batch.logits[0] = 1;
+
+        if (llama_decode(g_ctx, batch) != 0) {
+            LOGE("Decode failed at generation step %d", i);
+            break;
+        }
     }
 
-    llama_batch_free(batch);
     llama_sampler_free(sampler);
+    llama_batch_free(batch);
 
-    LOGI("Generated %d tokens", n_generated);
+    LOGI("Generated %d tokens, result length=%d", n_generated, (int)result.size());
     return env->NewStringUTF(result.c_str());
 }
 
-JNIEXPORT void JNICALL
-Java_com_nadrlab_visionai_ai_LocalLlmManager_nativeFreeModel(
-    JNIEnv* env, jobject /* this */) {
-    if (g_session.ctx) {
-        llama_free(g_session.ctx);
-        g_session.ctx = nullptr;
-    }
-    if (g_session.model) {
-        llama_model_free(g_session.model);
-        g_session.model = nullptr;
-    }
-    g_session.is_loaded = false;
-    LOGI("Model freed");
-}
-
-JNIEXPORT jboolean JNICALL
-Java_com_nadrlab_visionai_ai_LocalLlmManager_nativeIsLoaded(
-    JNIEnv* env, jobject /* this */) {
-    return g_session.is_loaded ? JNI_TRUE : JNI_FALSE;
-}
-
-JNIEXPORT jlong JNICALL
+// ═══ nativeGetMemUsage ═══
+extern "C" JNIEXPORT jlong JNICALL
 Java_com_nadrlab_visionai_ai_LocalLlmManager_nativeGetMemUsage(
-    JNIEnv* env, jobject /* this */) {
-    return 0;
+    JNIEnv *env, jobject thiz)
+{
+    if (!g_ctx) return 0;
+    jlong mem = llama_get_state_size(g_ctx);
+    LOGI("Memory usage: %lld bytes", mem);
+    return mem;
 }
 
-} // extern "C"
+// ═══ nativeUnload ═══
+extern "C" JNIEXPORT void JNICALL
+Java_com_nadrlab_visionai_ai_LocalLlmManager_nativeUnload(
+    JNIEnv *env, jobject thiz)
+{
+    LOGI("Unloading model...");
+    if (g_ctx) {
+        llama_free(g_ctx);
+        g_ctx = nullptr;
+    }
+    if (g_model) {
+        llama_model_free(g_model);
+        g_model = nullptr;
+    }
+    g_is_loaded = false;
+    LOGI("Model unloaded");
+}
