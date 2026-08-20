@@ -34,11 +34,17 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val _state = MutableStateFlow(AnalysisState())
     val state: StateFlow<AnalysisState> = _state
 
-    private val _ocrResult = MutableStateFlow("")
-    val ocrResult: StateFlow<String> = _ocrResult
+    private val _chatHistory = MutableStateFlow<List<String>>(emptyList())
+    val chatHistory: StateFlow<List<String>> = _chatHistory
+
+    private val _isChatLoading = MutableStateFlow(false)
+    val isChatLoading: StateFlow<Boolean> = _isChatLoading
 
     private val _history = MutableStateFlow<List<AnalysisEntity>>(emptyList())
     val history: StateFlow<List<AnalysisEntity>> = _history
+
+    // ═══ نص النتائج للمعالجة المحلية ═══
+    private var lastAnalysisText = ""
 
     init {
         _aiMode.value = AiMode.valueOf(settings.aiMode)
@@ -48,7 +54,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         _selectedImage.value = bitmap
         _selectedUri.value = uri
         _state.value = AnalysisState()
-        _ocrResult.value = ""
+        _chatHistory.value = emptyList()
+        lastAnalysisText = ""
     }
 
     fun clearImage() {
@@ -56,7 +63,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         _selectedImage.value = null
         _selectedUri.value = null
         _state.value = AnalysisState()
-        _ocrResult.value = ""
+        _chatHistory.value = emptyList()
+        lastAnalysisText = ""
     }
 
     fun setAnalysisType(type: AnalysisType) { _analysisType.value = type }
@@ -74,49 +82,48 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
         viewModelScope.launch {
             _state.value = AnalysisState(isLoading = true, progress = "جاري التحليل...")
+            _chatHistory.value = emptyList()
 
             try {
                 // 1. OCR
+                var ocrText = ""
                 if (settings.ocrEnabled) {
                     _state.value = _state.value.copy(progress = "استخراج النصوص...")
-                    val ocr = OcrEngine.recognize(bitmap)
-                    _ocrResult.value = ocr
+                    ocrText = OcrEngine.recognize(bitmap)
                 }
 
-                // 2. Determine effective mode
+                // 2. Determine mode
                 val effectiveMode = when (mode) {
-                    AiMode.AUTO -> if (localLlm.hasEnoughRam() && settings.modelDownloaded) {
+                    AiMode.AUTO -> AiMode.CLOUD
+                    AiMode.LOCAL -> {
+                        if (!settings.modelDownloaded) {
+                            _state.value = AnalysisState(isLoading = false, error = "النموذج المحلي غير مثبت. اذهب لصفحة النموذج لتحميله أو استخدم الوضع السحابي.")
+                            return@launch
+                        }
                         AiMode.LOCAL
-                    } else {
-                        AiMode.CLOUD
                     }
                     else -> mode
                 }
 
                 // 3. Analyze
-                val analysisPrompt = buildAnalysisPrompt(type, _ocrResult.value)
-                val resultText = when (effectiveMode) {
-                    AiMode.LOCAL -> {
-                        _state.value = _state.value.copy(progress = "التحليل المحلي...")
-                        localLlm.generate(analysisPrompt)
-                    }
-                    AiMode.CLOUD -> {
-                        _state.value = _state.value.copy(progress = "التحليل السحابي...")
-                        CloudVisionManager.analyze(bitmap, analysisPrompt).getOrElse {
-                            "فشل التحليل السحابي: ${it.message}"
-                        }
-                    }
-                    AiMode.AUTO -> {
-                        CloudVisionManager.analyze(bitmap, analysisPrompt).getOrElse {
-                            localLlm.generate(analysisPrompt)
-                        }
+                val resultText: String
+                if (effectiveMode == AiMode.LOCAL) {
+                    _state.value = _state.value.copy(progress = "التحليل المحلي...")
+                    val localPrompt = buildLocalPrompt(type, ocrText)
+                    resultText = localLlm.generate(localPrompt)
+                } else {
+                    _state.value = _state.value.copy(progress = "التحليل السحابي...")
+                    val cloudPrompt = buildCloudPrompt(type, ocrText)
+                    resultText = CloudVisionManager.analyze(bitmap, cloudPrompt).getOrElse {
+                        "فشل التحليل السحابي: ${it.message}"
                     }
                 }
 
-                // 4. Parse result
+                // 4. Parse
                 val parsed = parseResult(resultText)
+                lastAnalysisText = buildContextForChat(parsed, ocrText)
 
-                // 5. Web search
+                // 5. Search
                 var searchResults = emptyList<SearchResult>()
                 if (settings.searchEnabled && parsed.keywords.isNotEmpty()) {
                     _state.value = _state.value.copy(progress = "البحث في الإنترنت...")
@@ -141,16 +148,66 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 }
 
             } catch (e: Exception) {
-                _state.value = AnalysisState(
-                    isLoading = false,
-                    error = "خطأ: ${e.message}"
-                )
+                _state.value = AnalysisState(isLoading = false, error = "خطأ: ${e.message}")
             }
         }
     }
 
-    // ═══ بناء البرومت ═══
-    private fun buildAnalysisPrompt(type: AnalysisType, ocrText: String): String {
+    // ═══ المحادثة مع النموذج المحلي ═══
+    fun askLocalModel(question: String) {
+        viewModelScope.launch {
+            _isChatLoading.value = true
+
+            // أضف سؤال المستخدم
+            val currentHistory = _chatHistory.value.toMutableList()
+            currentHistory.add("USER: $question")
+            _chatHistory.value = currentHistory
+
+            try {
+                // تحميل النموذج إذا لم يكن محملاً
+                if (!localLlm.isLoaded() && settings.modelDownloaded) {
+                    localLlm.loadModel()
+                }
+
+                val prompt = buildChatPrompt(question, lastAnalysisText)
+                val response = localLlm.generate(prompt)
+
+                currentHistory.add("AI: $response")
+                _chatHistory.value = currentHistory
+            } catch (e: Exception) {
+                currentHistory.add("AI: خطأ: ${e.message}")
+                _chatHistory.value = currentHistory
+            }
+
+            _isChatLoading.value = false
+        }
+    }
+
+    // ═══ بناء برومפט المحادثة ═══
+    private fun buildChatPrompt(question: String, context: String): String {
+        return """أنت مساعد ذكي يجيب بالعربية. لديك نتائج تحليل صورة.
+
+$context
+
+سؤال المستخدم: $question
+
+أجب بإيجاز وبالعربية:"""
+    }
+
+    // ═══ بناء سياق المحادثة من النتائج ═══
+    private fun buildContextForChat(result: AnalysisResult, ocr: String): String {
+        return """نتائج التحليل:
+نوع المحتوى: ${result.contentType}
+الوصف: ${result.description}
+العناصر: ${result.elements.joinToString("،")}
+النص المستخرج: ${result.extractedText.ifBlank { ocr.ifBlank { "لا يوجد" } }}
+الكلمات المفتاحية: ${result.keywords.joinToString("،")}
+الثقة: ${result.confidence.label}
+معلومات إضافية: ${result.additionalInfo}"""
+    }
+
+    // ═══ بناء برومبت التحليل ═══
+    private fun buildCloudPrompt(type: AnalysisType, ocrText: String): String {
         val base = """${type.prompt}
 
 Respond in ARABIC. Format your response EXACTLY as follows:
@@ -169,6 +226,23 @@ Respond in ARABIC. Format your response EXACTLY as follows:
         } else {
             base
         }
+    }
+
+    private fun buildLocalPrompt(type: AnalysisType, ocrText: String): String {
+        return """أنت مساعد تحليل. النص المستخرج من صورة بواسطة OCR:
+
+${ocrText.ifBlank { "لا يوجد نص في الصورة" }}
+
+المطلوب: ${type.prompt}
+
+أجب بالعربية مع:
+[المحتوى]: نوع المحتوى
+[الوصف]: وصف مختصر
+[العناصر]: العناصر المكتشفة
+[الكلمات]: كلمات مفتاحية
+[الثقة]: مستوى الثقة
+[معلومات]: معلومات إضافية
+[نهاية]"""
     }
 
     // ═══ تحليل النتيجة ═══
