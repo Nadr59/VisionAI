@@ -23,6 +23,7 @@ import com.nadrlab.visionai.domain.SearchResult
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 class MainViewModel(app: Application) : AndroidViewModel(app) {
 
@@ -176,7 +177,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     // ═══ المحادثة مع النموذج المحلي ═══
-    fun askLocalModel(question: String) {
+        fun askLocalModel(question: String) {
         viewModelScope.launch {
             _isChatLoading.value = true
 
@@ -185,41 +186,70 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             _chatHistory.value = currentHistory
 
             try {
+                // تحميل النموذج
                 if (!localLlm.isLoaded()) {
                     if (!settings.modelDownloaded) {
-                        currentHistory.add("AI: ⚠️ النموذج المحلي غير مثبت. اذهب لصفحة 'النموذج' لتحميله.")
+                        currentHistory.add("AI: ⚠️ النموذج غير مثبت")
                         _chatHistory.value = currentHistory
                         _isChatLoading.value = false
                         return@launch
                     }
                     if (!localLlm.hasEnoughRam()) {
-                        currentHistory.add("AI: ⚠️ ذاكرة الجهاز غير كافية. أغلق التطبيقات الأخرى وحاول مرة أخرى.")
+                        currentHistory.add("AI: ⚠️ ذاكرة غير كافية. أغلق التطبيقات الأخرى")
                         _chatHistory.value = currentHistory
                         _isChatLoading.value = false
                         return@launch
                     }
+
+                    // تحديث: جاري تحميل النموذج
+                    currentHistory.add("AI: ⏳ جاري تحميل النموذج... قد يستغرق دقيقة")
+                    _chatHistory.value = currentHistory
+
                     val loaded = localLlm.loadModel()
                     if (!loaded) {
-                        currentHistory.add("AI: ⚠️ فشل تحميل النموذج. تأكد من سلامة ملف التنزيل.")
-                        _chatHistory.value = currentHistory
+                        // استبدل رسالة "جاري التحميل" برسالة الخطأ
+                        val updated = _chatHistory.value.toMutableList()
+                        updated.removeLast()
+                        updated.add("AI: ⚠️ فشل تحميل النموذج")
+                        _chatHistory.value = updated
                         _isChatLoading.value = false
                         return@launch
                     }
+
+                    // استبدل رسالة "جاري التحميل" بنجاح
+                    val updated = _chatHistory.value.toMutableList()
+                    updated.removeLast()
+                    _chatHistory.value = updated
                 }
 
-                val prompt = buildChatPrompt(question, _lastAnalysisText.value)
-                val response = localLlm.generate(prompt)
+                // إضافة رسالة "جاري التفكير"
+                currentHistory.add("AI: 🤔 جاري التفكير...")
+                _chatHistory.value = currentHistory
 
-                currentHistory.add("AI: $response")
-                _chatHistory.value = currentHistory
+                // توليد الرد مع timeout
+                val prompt = buildChatPrompt(question, _lastAnalysisText.value)
+                val response = withTimeoutOrNull(180_000L) { // 3 دقائق timeout
+                    localLlm.generate(prompt)
+                } ?: "⏰ انتهت المهلة. النموذج بطيء جداً على هذا الجهاز."
+
+                // استبدل رسالة "جاري التفكير" بالرد
+                val finalHistory = _chatHistory.value.toMutableList()
+                finalHistory.removeLast()
+                finalHistory.add("AI: $response")
+                _chatHistory.value = finalHistory
+
             } catch (e: Exception) {
-                currentHistory.add("AI: خطأ: ${e.message}")
-                _chatHistory.value = currentHistory
+                val errorHistory = _chatHistory.value.toMutableList()
+                if (errorHistory.lastOrNull()?.contains("جاري") == true) {
+                    errorHistory.removeLast()
+                }
+                errorHistory.add("AI: خطأ: ${e.message}")
+                _chatHistory.value = errorHistory
             }
 
             _isChatLoading.value = false
         }
-    }
+        }
 
     // ═══ معالجة النتائج مباشرة ═══
     fun processResults(fullPrompt: String, shortLabel: String) {
