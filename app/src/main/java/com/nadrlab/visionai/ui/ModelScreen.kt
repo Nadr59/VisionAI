@@ -209,37 +209,27 @@ fun ModelScreen(viewModel: MainViewModel) {
                     Text("إلغاء", color = Color.White)
                 }
             }
-            ModelState.READY -> {
+                        ModelState.READY -> {
                 Card(
                     colors = CardDefaults.cardColors(containerColor = Color(0xFF1A2A1A)),
                     shape = RoundedCornerShape(10.dp)
                 ) {
                     Text(
-                        "✅ النموذج جاهز. يمكنك الآن استخدام التحليل المحلي.",
+                        "✅ النموذج جاهز. سيتم تحميله تلقائياً عند الحاجة.",
                         color = Color(0xFF4CAF50),
                         fontSize = 13.sp,
                         modifier = Modifier.padding(14.dp)
                     )
                 }
 
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Button(
-                        onClick = { scope.launch { viewModel.localLlm.loadModel() } },
-                        modifier = Modifier.weight(1f),
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4CAF50)),
-                        shape = RoundedCornerShape(12.dp)
-                    ) {
-                        Text("تحميل النموذج", color = Color.White)
-                    }
-                    OutlinedButton(
-                        onClick = { downloader.deleteModel() },
-                        modifier = Modifier.weight(1f),
-                        shape = RoundedCornerShape(12.dp)
-                    ) {
-                        Text("حذف", color = Color(0xFFF44336))
-                    }
+                OutlinedButton(
+                    onClick = { downloader.deleteModel() },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Text("حذف النموذج", color = Color(0xFFF44336))
                 }
-            }
+                        }
             ModelState.LOADING -> {
                 CircularProgressIndicator(
                     modifier = Modifier
