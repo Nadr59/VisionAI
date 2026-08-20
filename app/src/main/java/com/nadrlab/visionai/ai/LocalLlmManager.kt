@@ -25,20 +25,22 @@ class LocalLlmManager(private val context: Context, private val settings: AppSet
         }
     }
 
-        fun hasEnoughRam(): Boolean {
+            fun hasEnoughRam(): Boolean {
         val am = context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
         val memInfo = ActivityManager.MemoryInfo()
         am.getMemoryInfo(memInfo)
         val availableMb = memInfo.availMem / (1024 * 1024)
-        return availableMb > 800 // Lowered for Redmi 8
-        }
+        return availableMb > 600 // Very lenient for Redmi 8
+            }
 
-    suspend fun loadModel(): Boolean = withContext(Dispatchers.IO) {
+        suspend fun loadModel(): Boolean = withContext(Dispatchers.IO) {
         if (_state.value == ModelState.LOADED) return@withContext true
         if (!settings.modelDownloaded || settings.modelPath.isBlank()) {
             _state.value = ModelState.NOT_DOWNLOADED
             return@withContext false
         }
+
+        // Check RAM — but be lenient
         if (!hasEnoughRam()) {
             _state.value = ModelState.ERROR
             return@withContext false
@@ -46,21 +48,26 @@ class LocalLlmManager(private val context: Context, private val settings: AppSet
 
         _state.value = ModelState.LOADING
 
-        val success = nativeLoadModel(
-            settings.modelPath,
-            settings.contextSize,
-            settings.threads
-        )
+        try {
+            val success = nativeLoadModel(
+                settings.modelPath,
+                settings.contextSize,
+                settings.threads
+            )
 
-        _state.value = if (success) {
-            _memUsage.value = nativeGetMemUsage()
-            ModelState.LOADED
-        } else {
-            ModelState.ERROR
+            _state.value = if (success) {
+                _memUsage.value = nativeGetMemUsage()
+                ModelState.LOADED
+            } else {
+                ModelState.ERROR
+            }
+
+            success
+        } catch (e: Exception) {
+            _state.value = ModelState.ERROR
+            false
         }
-
-        success
-    }
+        }
 
         suspend fun generate(prompt: String, onToken: ((String) -> Unit)? = null): String {
         if (_state.value != ModelState.LOADED) {
