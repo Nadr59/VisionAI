@@ -252,7 +252,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
 
     // ═══ معالجة النتائج مباشرة ═══
-    fun processResults(fullPrompt: String, shortLabel: String) {
+        fun processResults(fullPrompt: String, shortLabel: String) {
         viewModelScope.launch {
             _isChatLoading.value = true
 
@@ -274,26 +274,49 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                         _isChatLoading.value = false
                         return@launch
                     }
+
+                    currentHistory.add("AI: ⏳ جاري تحميل النموذج...")
+                    _chatHistory.value = currentHistory
+
                     val loaded = localLlm.loadModel()
                     if (!loaded) {
-                        currentHistory.add("AI: ⚠️ فشل تحميل النموذج")
-                        _chatHistory.value = currentHistory
+                        val updated = _chatHistory.value.toMutableList()
+                        updated.removeLast()
+                        updated.add("AI: ⚠️ فشل تحميل النموذج")
+                        _chatHistory.value = updated
                         _isChatLoading.value = false
                         return@launch
                     }
+
+                    val updated = _chatHistory.value.toMutableList()
+                    updated.removeLast()
+                    _chatHistory.value = updated
                 }
 
-                val response = localLlm.generate(fullPrompt)
-                currentHistory.add("AI: $response")
+                currentHistory.add("AI: 🤔 جاري المعالجة...")
                 _chatHistory.value = currentHistory
+
+                val response = withTimeoutOrNull(180_000L) {
+                    localLlm.generate(fullPrompt)
+                } ?: "⏰ انتهت المهلة. جرّب نصاً أقصر."
+
+                val finalHistory = _chatHistory.value.toMutableList()
+                finalHistory.removeLast()
+                finalHistory.add("AI: $response")
+                _chatHistory.value = finalHistory
+
             } catch (e: Exception) {
-                currentHistory.add("AI: خطأ: ${e.message}")
-                _chatHistory.value = currentHistory
+                val errorHistory = _chatHistory.value.toMutableList()
+                if (errorHistory.lastOrNull()?.contains("جاري") == true) {
+                    errorHistory.removeLast()
+                }
+                errorHistory.add("AI: خطأ: ${e.message}")
+                _chatHistory.value = errorHistory
             }
 
             _isChatLoading.value = false
         }
-    }
+        }
 
     // ═══ بناء برومبتات ═══
     private fun buildChatPrompt(question: String, context: String): String {
