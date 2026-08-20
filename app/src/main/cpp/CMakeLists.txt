@@ -22,21 +22,19 @@ set(GGML_CUDA OFF CACHE BOOL "" FORCE)
 set(GGML_VULKAN OFF CACHE BOOL "" FORCE)
 set(GGML_OPENCL OFF CACHE BOOL "" FORCE)
 
-# Build llama.cpp using its own cmake
+# Build llama.cpp
 add_subdirectory(${LLAMA_DIR} llama_build)
 
-# Our JNI library
+# JNI library — only link llama, not common
 add_library(llama_jni SHARED llama_jni.cpp)
 
 target_include_directories(llama_jni PRIVATE
     ${LLAMA_DIR}/include
-    ${LLAMA_DIR}/common
 )
 
 target_link_libraries(llama_jni
     PRIVATE
     llama
-    common
     android
     log
 )
