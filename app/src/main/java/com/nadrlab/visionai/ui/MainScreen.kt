@@ -242,7 +242,8 @@ fun MainScreen(viewModel: MainViewModel) {
         // ─── وضع AI ───
         item {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                AiMode.entries.forEach { mode ->
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                listOf(AiMode.CLOUD, AiMode.AUTO).forEach { mode ->
                     FilterChip(
                         selected = aiMode == mode,
                         onClick = { viewModel.setAiMode(mode) },
@@ -252,6 +253,13 @@ fun MainScreen(viewModel: MainViewModel) {
                         )
                     )
                 }
+            }
+            val modeDesc = when (aiMode) {
+                AiMode.LOCAL -> "النموذج المحلي (غير مُوصى به — بطيء جداً)"
+                AiMode.CLOUD -> "رؤية سحابية (سريع — يحلل الصورة بالكامل)"
+                AiMode.AUTO -> "تلقائي: يستخدم السحابي"
+            }
+            Text(modeDesc, color = Color(0xFF666666), fontSize = 10.sp)
             }
             val modeDesc = when (aiMode) {
                 AiMode.LOCAL -> "النموذج النصي المحلي (يعالج النصوص فقط — لا يرى الصور)"
