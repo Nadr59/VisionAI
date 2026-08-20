@@ -62,29 +62,39 @@ class LocalLlmManager(private val context: Context, private val settings: AppSet
         success
     }
 
-    suspend fun generate(prompt: String, onToken: ((String) -> Unit)? = null): String {
+        suspend fun generate(prompt: String, onToken: ((String) -> Unit)? = null): String {
         if (_state.value != ModelState.LOADED) {
             val loaded = loadModel()
             if (!loaded) return "النموذج غير جاهز. تحقق من التنزيل."
         }
 
         return withContext(Dispatchers.IO) {
-            val callback = object : TokenCallback {
-                override fun onToken(token: String) {
-                    onToken?.invoke(token)
+            try {
+                val callback = object : TokenCallback {
+                    override fun onToken(token: String) {
+                        onToken?.invoke(token)
+                    }
                 }
-            }
 
-            nativeGenerate(
-                prompt,
-                settings.maxTokens,
-                settings.temperature,
-                settings.topP,
-                settings.topK,
-                callback
-            )
+                val result = nativeGenerate(
+                    prompt,
+                    settings.maxTokens,
+                    settings.temperature,
+                    settings.topP,
+                    settings.topK,
+                    callback
+                )
+
+                if (result.isBlank()) {
+                    "النموذج لم يُنتج رداً. قد تكون الذاكرة غير كافية."
+                } else {
+                    result
+                }
+            } catch (e: Exception) {
+                "خطأ أثناء التوليد: ${e.message}"
+            }
         }
-    }
+        }
 
     fun unloadModel() {
         if (_state.value == ModelState.LOADED) {
