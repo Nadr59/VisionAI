@@ -16,9 +16,7 @@ enum class AnalysisType(val label: String, val labelAr: String, val prompt: Stri
 
 // ═══ وضع الذكاء الاصطناعي ═══
 enum class AiMode(val label: String) {
-    LOCAL("محلي"),
-    CLOUD("سحابي"),
-    AUTO("تلقائي")
+    CLOUD("سحابي")
 }
 
 // ═══ مستوى الثقة ═══
@@ -48,9 +46,6 @@ data class SearchResult(
     val snippet: String = "",
     val source: String = ""
 )
-
-// ═══ حالة النموذج المحلي ═══
-enum class ModelState { NOT_DOWNLOADED, DOWNLOADING, READY, LOADING, LOADED, ERROR }
 
 // ═══ حالة التحليل ═══
 data class AnalysisState(
