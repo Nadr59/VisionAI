@@ -315,7 +315,7 @@ $context
     // HISTORY
     // ═══════════════════════════════════════════
 
-        private fun saveToHistory(
+            private fun saveToHistory(
         type: AnalysisType,
         result: AnalysisResult,
         search: List<SearchResult>,
@@ -326,7 +326,7 @@ $context
                 db.analysisDao().insert(
                     AnalysisEntity(
                         analysisType = type.name,
-                        contentType = result.contentType,    // ← هذا السطر كان ناقص
+                        contentType = result.contentType,   // ← تأكد هذا السطر موجود
                         description = result.description,
                         elements = result.elements.joinToString("،"),
                         extractedText = result.extractedText,
@@ -339,8 +339,7 @@ $context
                 )
             } catch (_: Exception) {}
         }
-        }
-
+            }
     fun loadHistory() {
         viewModelScope.launch {
             try {
