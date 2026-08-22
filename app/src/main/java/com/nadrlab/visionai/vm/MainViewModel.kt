@@ -6,51 +6,48 @@ import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.nadrlab.visionai.ai.CloudVisionManager
-import com.nadrlab.visionai.ai.ImageProcessor
-import com.nadrlab.visionai.ai.LocalLlmManager
-import com.nadrlab.visionai.ai.ModelDownloader
-import com.nadrlab.visionai.ai.OcrEngine
 import com.nadrlab.visionai.ai.WebSearchEngine
 import com.nadrlab.visionai.data.AnalysisEntity
 import com.nadrlab.visionai.data.AppDatabase
 import com.nadrlab.visionai.data.AppSettings
-import com.nadrlab.visionai.domain.AiMode
-import com.nadrlab.visionai.domain.AnalysisResult
-import com.nadrlab.visionai.domain.AnalysisState
-import com.nadrlab.visionai.domain.AnalysisType
-import com.nadrlab.visionai.domain.ConfidenceLevel
-import com.nadrlab.visionai.domain.SearchResult
+import com.nadrlab.visionai.domain.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withTimeoutOrNull
-import java.io.File
 
 class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     val settings = AppSettings(app)
-    val modelDownloader = ModelDownloader(app, settings)
-    val localLlm = LocalLlmManager(app, settings)
     private val db = AppDatabase.get(app)
 
-    // ═══ Image ═══
+    init {
+        CloudVisionManager.init(settings)
+    }
+
+    // ═══════════════════════════════════════════
+    // IMAGE
+    // ═══════════════════════════════════════════
+
     private val _selectedImage = MutableStateFlow<Bitmap?>(null)
     val selectedImage: StateFlow<Bitmap?> = _selectedImage
 
     private val _selectedUri = MutableStateFlow<Uri?>(null)
     val selectedUri: StateFlow<Uri?> = _selectedUri
 
-    // ═══ Analysis ═══
+    // ═══════════════════════════════════════════
+    // ANALYSIS
+    // ═══════════════════════════════════════════
+
     private val _analysisType = MutableStateFlow(AnalysisType.GENERAL)
     val analysisType: StateFlow<AnalysisType> = _analysisType
-
-    private val _aiMode = MutableStateFlow(AiMode.AUTO)
-    val aiMode: StateFlow<AiMode> = _aiMode
 
     private val _state = MutableStateFlow(AnalysisState())
     val state: StateFlow<AnalysisState> = _state
 
-    // ═══ Chat ═══
+    // ═══════════════════════════════════════════
+    // CHAT
+    // ═══════════════════════════════════════════
+
     private val _chatHistory = MutableStateFlow<List<String>>(emptyList())
     val chatHistory: StateFlow<List<String>> = _chatHistory
 
@@ -60,14 +57,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val _lastAnalysisText = MutableStateFlow("")
     val lastAnalysisText: StateFlow<String> = _lastAnalysisText
 
-    // ═══ History ═══
+    // ═══════════════════════════════════════════
+    // HISTORY
+    // ═══════════════════════════════════════════
+
     private val _history = MutableStateFlow<List<AnalysisEntity>>(emptyList())
     val history: StateFlow<List<AnalysisEntity>> = _history
-
-        init {
-        _aiMode.value = AiMode.valueOf(settings.aiMode)
-        CloudVisionManager.init(settings)
-        }
 
     // ═══════════════════════════════════════════
     // IMAGE
@@ -95,19 +90,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         _analysisType.value = type
     }
 
-    fun setAiMode(mode: AiMode) {
-        _aiMode.value = mode
-        settings.aiMode = mode.name
-    }
-
     // ═══════════════════════════════════════════
-    // ANALYSIS
+    // ANALYSIS — سحابي فقط
     // ═══════════════════════════════════════════
 
     fun analyze() {
         val bitmap = _selectedImage.value ?: return
         val type = _analysisType.value
-        val mode = _aiMode.value
 
         viewModelScope.launch {
             _state.value = AnalysisState(isLoading = true, progress = "جاري التحليل...")
@@ -115,53 +104,26 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             _lastAnalysisText.value = ""
 
             try {
-                // OCR
-                var ocrText = ""
-                if (settings.ocrEnabled) {
-                    _state.value = _state.value.copy(progress = "استخراج النصوص...")
-                    ocrText = OcrEngine.recognize(bitmap)
+                // ═══ بناء prompt ═══
+                val prompt = buildCloudPrompt(type)
+
+                // ═══ تحليل سحابي ═══
+                _state.value = _state.value.copy(progress = "جاري إرسال الصورة للمزود...")
+                val resultText = CloudVisionManager.analyze(bitmap, prompt).getOrElse {
+                    throw Exception("فشل التحليل: ${it.message}")
                 }
 
-                // Effective mode
-                val effectiveMode = when (mode) {
-                    AiMode.AUTO -> AiMode.CLOUD
-                    AiMode.LOCAL -> {
-                        if (!settings.modelDownloaded) {
-                            _state.value = AnalysisState(
-                                isLoading = false,
-                                error = "النموذج المحلي غير مثبت. اذهب لصفحة 'النموذج' أو استخدم الوضع السحابي."
-                            )
-                            return@launch
-                        }
-                        AiMode.LOCAL
-                    }
-                    AiMode.CLOUD -> AiMode.CLOUD
-                }
-
-                // Analyze
-                val resultText: String
-                if (effectiveMode == AiMode.LOCAL) {
-                    _state.value = _state.value.copy(progress = "التحليل المحلي...")
-                    val localPrompt = buildLocalPrompt(type, ocrText)
-                    resultText = localLlm.generate(localPrompt)
-                } else {
-                    _state.value = _state.value.copy(progress = "التحليل السحابي...")
-                    val cloudPrompt = buildCloudPrompt(type, ocrText)
-                    resultText = CloudVisionManager.analyze(bitmap, cloudPrompt).getOrElse {
-                        "فشل التحليل السحابي: ${it.message}"
-                    }
-                }
-
-                // Parse
+                // ═══ تحليل النتائج ═══
+                _state.value = _state.value.copy(progress = "جاري معالجة النتائج...")
                 val parsed = parseResult(resultText)
-                _lastAnalysisText.value = buildContextForChat(parsed, ocrText)
+                _lastAnalysisText.value = buildContextForChat(parsed)
 
-                // Search
+                // ═══ بحث ويب ═══
                 var searchResults = emptyList<SearchResult>()
                 if (settings.searchEnabled && parsed.keywords.isNotEmpty()) {
-                    _state.value = _state.value.copy(progress = "البحث...")
+                    _state.value = _state.value.copy(progress = "جاري البحث...")
                     try {
-                        val queries = WebSearchEngine.generateSearchQueries(parsed.keywords, parsed.contentType)
+                        val queries = WebSearchEngine.generateSearchQueries(parsed.keywords)
                         val allResults = mutableListOf<SearchResult>()
                         for (q in queries.take(3)) {
                             allResults.addAll(WebSearchEngine.search(q))
@@ -170,30 +132,35 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     } catch (_: Exception) {}
                 }
 
-                // Update
+                // ═══ تحديث الحالة ═══
                 _state.value = AnalysisState(
                     isLoading = false,
                     result = parsed,
                     searchResults = searchResults,
-                    usedMode = effectiveMode
+                    usedMode = AiMode.CLOUD
                 )
 
-                // Save
+                // ═══ حفظ ═══
                 if (settings.saveHistory) {
-                    saveToHistory(type, effectiveMode, parsed, searchResults, _selectedUri.value?.toString() ?: "")
+                    saveToHistory(type, parsed, searchResults, _selectedUri.value?.toString() ?: "")
                 }
 
             } catch (e: Exception) {
-                _state.value = AnalysisState(isLoading = false, error = "خطأ: ${e.message}")
+                _state.value = AnalysisState(
+                    isLoading = false,
+                    error = "خطأ: ${e.message}"
+                )
             }
         }
     }
 
     // ═══════════════════════════════════════════
-    // CHAT WITH LOCAL MODEL
+    // CHAT — سحابي (مع صورة أو بدون)
     // ═══════════════════════════════════════════
 
-    fun askLocalModel(question: String) {
+    fun askQuestion(question: String) {
+        if (question.isBlank()) return
+
         viewModelScope.launch {
             _isChatLoading.value = true
 
@@ -202,99 +169,42 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             _chatHistory.value = currentHistory
 
             try {
-                // Refresh state
-                localLlm.refreshState()
+                // ═══ بناء prompt مع سياق التحليل ═══
+                val chatPrompt = buildChatPrompt(question, _lastAnalysisText.value)
+                val bitmap = _selectedImage.value
 
-                // Check file
-                val path = settings.modelPath
-                val file = File(path)
-                val fileSizeMb = if (file.exists()) file.length() / (1024 * 1024) else 0
-
-                // Get RAM info
-                val am = getApplication<Application>().getSystemService(
-                    android.content.Context.ACTIVITY_SERVICE
-                ) as android.app.ActivityManager
-                val memInfo = android.app.ActivityManager.MemoryInfo()
-                am.getMemoryInfo(memInfo)
-                val ramAvail = memInfo.availMem / (1024 * 1024)
-                val ramTotal = memInfo.totalMem / (1024 * 1024)
-
-                // If model not loaded, try loading
-                if (!localLlm.isLoaded()) {
-                    // Pre-checks
-                    if (!file.exists() || fileSizeMb < 100) {
-                        currentHistory.add(
-                            "AI: ⚠️ ملف النموذج غير موجود أو ناقص.\n" +
-                            "المسار: $path\n" +
-                            "الحجم: ${fileSizeMb} MB\n\n" +
-                            "اذهب لصفحة 'النموذج' وأعد الاستيراد."
-                        )
-                        _chatHistory.value = currentHistory
-                        _isChatLoading.value = false
-                        return@launch
-                    }
-
-                    // Show loading message
-                    currentHistory.add(
-                        "AI: ⏳ جاري تحميل النموذج (${fileSizeMb}MB)...\n" +
-                        "ذاكرة متاحة: ${ramAvail}MB\n" +
-                        "قد يستغرق 1-2 دقيقة. لا تغلق التطبيق."
-                    )
-                    _chatHistory.value = currentHistory
-
-                    // Load
-                    val loaded = localLlm.loadModel()
-
-                    if (!loaded) {
-                        val logContent = localLlm.readLog()
-                        val updated = _chatHistory.value.toMutableList()
-                        updated.removeLast()
-                        updated.add(
-                            "AI: ❌ فشل تحميل النموذج.\n\n" +
-                            "📋 معلومات التشخيص:\n" +
-                            "المسار: $path\n" +
-                            "حجم الملف: ${fileSizeMb} MB\n" +
-                            "ذاكرة متاحة: ${ramAvail}MB / ${ramTotal}MB\n" +
-                            "حالة النموذج: ${localLlm.state.value}\n\n" +
-                            "📋 سجل مفصل:\n$logContent\n\n" +
-                            "💡 نصائح:\n" +
-                            "• جرّب نموذج أصغر (Qwen3-0.6B)\n" +
-                            "• أغلق التطبيقات الأخرى\n" +
-                            "• أعد تشغيل الجهاز"
-                        )
-                        _chatHistory.value = updated
-                        _isChatLoading.value = false
-                        return@launch
-                    }
-
-                    // Remove loading message
-                    val updated = _chatHistory.value.toMutableList()
-                    updated.removeLast()
-                    _chatHistory.value = updated
-                }
-
-                // Generate
+                // ═══ إرسال للمزود ═══
                 currentHistory.add("AI: 🤔 جاري التفكير...")
                 _chatHistory.value = currentHistory
 
-                val prompt = buildChatPrompt(question, _lastAnalysisText.value)
+                val result = if (bitmap != null) {
+                    // مع صورة
+                    CloudVisionManager.analyze(bitmap, chatPrompt)
+                } else {
+                    // بدون صورة — نرسل كنص فقط
+                    // نستخدم نفس API مع نص فقط
+                    CloudVisionManager.analyze(
+                        createBlankBitmap(),
+                        chatPrompt
+                    )
+                }
 
-                val response = withTimeoutOrNull(180_000L) {
-                    localLlm.generate(prompt)
-                } ?: "⏰ انتهت المهلة (3 دقائق)"
+                val response = result.getOrElse {
+                    "❌ خطأ: ${it.message}"
+                }
 
+                // ═══ تحديث المحادثة ═══
                 val finalHistory = _chatHistory.value.toMutableList()
-                finalHistory.removeLast()
+                finalHistory.removeLast() // احذف "جاري التفكير"
                 finalHistory.add("AI: $response")
                 _chatHistory.value = finalHistory
 
-            } catch (e: Throwable) {
-                val logContent = localLlm.readLog()
+            } catch (e: Exception) {
                 val errorHistory = _chatHistory.value.toMutableList()
-                errorHistory.removeAll { it.startsWith("AI:") && it.contains("جاري") }
-                errorHistory.add(
-                    "AI: ❌ خطأ: ${e.message}\n\n📋 سجل:\n$logContent"
-                )
+                errorHistory.removeAll {
+                    it.startsWith("AI:") && it.contains("جاري")
+                }
+                errorHistory.add("AI: ❌ خطأ: ${e.message}")
                 _chatHistory.value = errorHistory
             }
 
@@ -302,101 +212,21 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    // ═══════════════════════════════════════════
-    // PROCESS RESULTS (Quick Actions)
-    // ═══════════════════════════════════════════
+    // ═══ إنشاء bitmap فارغ للشات بدون صورة ═══
+    private fun createBlankBitmap(): Bitmap {
+        return Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888)
+    }
 
-    fun processResults(fullPrompt: String, shortLabel: String) {
-        viewModelScope.launch {
-            _isChatLoading.value = true
-
-            val currentHistory = _chatHistory.value.toMutableList()
-            currentHistory.add("USER: $shortLabel")
-            _chatHistory.value = currentHistory
-
-            try {
-                localLlm.refreshState()
-
-                if (!localLlm.isLoaded()) {
-                    val path = settings.modelPath
-                    val file = File(path)
-                    val fileSizeMb = if (file.exists()) file.length() / (1024 * 1024) else 0
-
-                    if (!file.exists() || fileSizeMb < 100) {
-                        currentHistory.add("AI: ⚠️ النموذج غير مثبت")
-                        _chatHistory.value = currentHistory
-                        _isChatLoading.value = false
-                        return@launch
-                    }
-
-                    currentHistory.add("AI: ⏳ جاري تحميل النموذج...")
-                    _chatHistory.value = currentHistory
-
-                    val loaded = localLlm.loadModel()
-                    if (!loaded) {
-                        val logContent = localLlm.readLog()
-                        val updated = _chatHistory.value.toMutableList()
-                        updated.removeLast()
-                        updated.add("AI: ❌ فشل التحميل.\n📋 سجل:\n$logContent")
-                        _chatHistory.value = updated
-                        _isChatLoading.value = false
-                        return@launch
-                    }
-
-                    val updated = _chatHistory.value.toMutableList()
-                    updated.removeLast()
-                    _chatHistory.value = updated
-                }
-
-                currentHistory.add("AI: 🤔 جاري المعالجة...")
-                _chatHistory.value = currentHistory
-
-                val response = withTimeoutOrNull(180_000L) {
-                    localLlm.generate(fullPrompt)
-                } ?: "⏰ انتهت المهلة"
-
-                val finalHistory = _chatHistory.value.toMutableList()
-                finalHistory.removeLast()
-                finalHistory.add("AI: $response")
-                _chatHistory.value = finalHistory
-
-            } catch (e: Throwable) {
-                val logContent = localLlm.readLog()
-                val errorHistory = _chatHistory.value.toMutableList()
-                errorHistory.removeAll { it.startsWith("AI:") && it.contains("جاري") }
-                errorHistory.add("AI: ❌ خطأ: ${e.message}\n📋 سجل:\n$logContent")
-                _chatHistory.value = errorHistory
-            }
-
-            _isChatLoading.value = false
-        }
+    fun clearChat() {
+        _chatHistory.value = emptyList()
     }
 
     // ═══════════════════════════════════════════
     // PROMPTS
     // ═══════════════════════════════════════════
 
-    private fun buildChatPrompt(question: String, context: String): String {
-        return "أنت مساعد ذكي يجيب بالعربية.\n\n" +
-            "معلومات من تحليل صورة:\n$context\n\n" +
-            "سؤال المستخدم: $question\n\n" +
-            "أجب بإيجاز وبوضوح:"
-    }
-
-    private fun buildContextForChat(result: AnalysisResult, ocr: String): String {
-        val sb = StringBuilder()
-        sb.append("نوع المحتوى: ${result.contentType}\n")
-        sb.append("الوصف: ${result.description}\n")
-        sb.append("العناصر: ${result.elements.joinToString("،")}\n")
-        sb.append("النص المستخرج: ${result.extractedText.ifBlank { ocr.ifBlank { "لا يوجد" } }}\n")
-        sb.append("الكلمات المفتاحية: ${result.keywords.joinToString("،")}\n")
-        sb.append("الثقة: ${result.confidence.label}\n")
-        sb.append("معلومات إضافية: ${result.additionalInfo}")
-        return sb.toString()
-    }
-
-    private fun buildCloudPrompt(type: AnalysisType, ocrText: String): String {
-        val base = """${type.prompt}
+    private fun buildCloudPrompt(type: AnalysisType): String {
+        return """${type.prompt}
 
 Respond in ARABIC. Format your response EXACTLY as follows:
 
@@ -408,29 +238,37 @@ Respond in ARABIC. Format your response EXACTLY as follows:
 [الثقة]: (عالي/متوسط/منخفض/غير مؤكد)
 [معلومات]: (معلومات إضافية مهمة)
 [نهاية]"""
+    }
 
-        return if (ocrText.isNotBlank()) {
-            "$base\n\nالنص المستخرج بالـ OCR:\n$ocrText"
+    private fun buildChatPrompt(question: String, context: String): String {
+        return if (context.isNotBlank()) {
+            """أنت مساعد ذكي يجيب بالعربية.
+
+معلومات من تحليل صورة سابق:
+$context
+
+سؤال المستخدم: $question
+
+أجب بإيجاز وبوضوح."""
         } else {
-            base
+            """أنت مساعد ذكي يجيب بالعربية.
+
+سؤال المستخدم: $question
+
+أجب بإيجاز وبوضوح."""
         }
     }
 
-    private fun buildLocalPrompt(type: AnalysisType, ocrText: String): String {
-        return """أنت مساعد تحليل. النص المستخرج من صورة بواسطة OCR:
-
-${ocrText.ifBlank { "لا يوجد نص في الصورة" }}
-
-المطلوب: ${type.prompt}
-
-أجب بالعربية مع:
-[المحتوى]: نوع المحتوى
-[الوصف]: وصف مختصر
-[العناصر]: العناصر المكتشفة
-[الكلمات]: كلمات مفتاحية
-[الثقة]: مستوى الثقة
-[معلومات]: معلومات إضافية
-[نهاية]"""
+    private fun buildContextForChat(result: AnalysisResult): String {
+        val sb = StringBuilder()
+        sb.append("نوع المحتوى: ${result.contentType}\n")
+        sb.append("الوصف: ${result.description}\n")
+        sb.append("العناصر: ${result.elements.joinToString("،")}\n")
+        sb.append("النص المستخرج: ${result.extractedText.ifBlank { "لا يوجد" }}\n")
+        sb.append("الكلمات المفتاحية: ${result.keywords.joinToString("،")}\n")
+        sb.append("الثقة: ${result.confidence.label}\n")
+        sb.append("معلومات إضافية: ${result.additionalInfo}")
+        return sb.toString()
     }
 
     // ═══════════════════════════════════════════
@@ -477,29 +315,30 @@ ${ocrText.ifBlank { "لا يوجد نص في الصورة" }}
     // HISTORY
     // ═══════════════════════════════════════════
 
-    private suspend fun saveToHistory(
+    private fun saveToHistory(
         type: AnalysisType,
-        mode: AiMode,
         result: AnalysisResult,
         search: List<SearchResult>,
         uri: String
     ) {
-        try {
-            val entity = AnalysisEntity(
-                analysisType = type.name,
-                aiMode = mode.name,
-                contentType = result.contentType,
-                description = result.description,
-                elements = result.elements.joinToString("،"),
-                extractedText = result.extractedText,
-                keywords = result.keywords.joinToString("،"),
-                confidence = result.confidence.name,
-                fullResult = result.fullText,
-                searchResults = search.joinToString("\n") { "${it.title}|${it.url}" },
-                imageUri = uri
-            )
-            db.analysisDao().insert(entity)
-        } catch (_: Exception) {}
+        viewModelScope.launch {
+            try {
+                db.analysisDao().insert(
+                    AnalysisEntity(
+                        analysisType = type.name,
+                        contentType = result.contentType,
+                        description = result.description,
+                        elements = result.elements.joinToString("،"),
+                        extractedText = result.extractedText,
+                        keywords = result.keywords.joinToString("،"),
+                        confidence = result.confidence.name,
+                        fullResult = result.fullText,
+                        searchResults = search.joinToString("\n") { "${it.title}|${it.url}" },
+                        imageUri = uri
+                    )
+                )
+            } catch (_: Exception) {}
+        }
     }
 
     fun loadHistory() {
@@ -519,9 +358,12 @@ ${ocrText.ifBlank { "لا يوجد نص في الصورة" }}
         }
     }
 
+    // ═══════════════════════════════════════════
+    // CLEANUP
+    // ═══════════════════════════════════════════
+
     override fun onCleared() {
         super.onCleared()
-        localLlm.unloadModel()
         _selectedImage.value?.recycle()
     }
 }
