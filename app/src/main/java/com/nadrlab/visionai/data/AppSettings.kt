@@ -3,15 +3,42 @@ package com.nadrlab.visionai.data
 import android.content.Context
 
 class AppSettings(context: Context) {
+
     private val prefs = context.getSharedPreferences("settings", Context.MODE_PRIVATE)
 
-    var aiMode: String
-        get() = prefs.getString("ai_mode", "AUTO") ?: "AUTO"
-        set(v) = prefs.edit().putString("ai_mode", v).apply()
+    // ═══════════════════════════════════════════
+    //  المزود المخصص (عام لأي API)
+    // ═══════════════════════════════════════════
 
-    var defaultAnalysisType: String
-        get() = prefs.getString("analysis_type", "GENERAL") ?: "GENERAL"
-        set(v) = prefs.edit().putString("analysis_type", v).apply()
+    // رابط API الكامل
+    // مثال: https://api.cometapi.com/v1/chat/completions
+    // مثال: https://zenmux.ai/api/v1/chat/completions
+    // مثال: https://openrouter.ai/api/v1/chat/completions
+    var providerUrl: String
+        get() = prefs.getString("provider_url", "") ?: ""
+        set(v) = prefs.edit().putString("provider_url", v).apply()
+
+    // مفتاح API
+    var providerKey: String
+        get() = prefs.getString("provider_key", "") ?: ""
+        set(v) = prefs.edit().putString("provider_key", v).apply()
+
+    // اسم النموذج
+    // مثال: glm-5.3
+    // مثال: gpt-4o
+    // مثال: deepseek/deepseek-chat-v3-0324:free
+    var providerModel: String
+        get() = prefs.getString("provider_model", "glm-5.3") ?: "glm-5.3"
+        set(v) = prefs.edit().putString("provider_model", v).apply()
+
+    // اسم المزود (للعرض فقط)
+    var providerName: String
+        get() = prefs.getString("provider_name", "") ?: ""
+        set(v) = prefs.edit().putString("provider_name", v).apply()
+
+    // ═══════════════════════════════════════════
+    //  إعدادات عامة
+    // ═══════════════════════════════════════════
 
     var searchEnabled: Boolean
         get() = prefs.getBoolean("search_enabled", true)
@@ -25,47 +52,35 @@ class AppSettings(context: Context) {
         get() = prefs.getBoolean("save_history", true)
         set(v) = prefs.edit().putBoolean("save_history", v).apply()
 
-    // Model settings
-    var contextSize: Int
-        get() = prefs.getInt("context_size", 512)
-        set(v) = prefs.edit().putInt("context_size", v).apply()
+    var defaultAnalysisType: String
+        get() = prefs.getString("analysis_type", "GENERAL") ?: "GENERAL"
+        set(v) = prefs.edit().putString("analysis_type", v).apply()
 
-    var threads: Int
-        get() = prefs.getInt("threads", 3)
-        set(v) = prefs.edit().putInt("threads", v).apply()
+    // ═══════════════════════════════════════════
+    //  هل المزود المخصص مُعد؟
+    // ═══════════════════════════════════════════
+    fun isCustomProviderConfigured(): Boolean {
+        return providerUrl.isNotBlank() && providerKey.isNotBlank()
+    }
 
-    var temperature: Float
-        get() = prefs.getFloat("temperature", 0.6f)
-        set(v) = prefs.edit().putFloat("temperature", v).apply()
+    // ═══════════════════════════════════════════
+    //  حفظ مزود كامل دفعة واحدة
+    // ═══════════════════════════════════════════
+    fun saveProvider(name: String, url: String, key: String, model: String) {
+        prefs.edit()
+            .putString("provider_name", name)
+            .putString("provider_url", url)
+            .putString("provider_key", key)
+            .putString("provider_model", model)
+            .apply()
+    }
 
-    var topP: Float
-        get() = prefs.getFloat("top_p", 0.8f)
-        set(v) = prefs.edit().putFloat("top_p", v).apply()
-
-    var topK: Int
-        get() = prefs.getInt("top_k", 20)
-        set(v) = prefs.edit().putInt("top_k", v).apply()
-
-    var maxTokens: Int
-        get() = prefs.getInt("max_tokens", 150)
-        set(v) = prefs.edit().putInt("max_tokens", v).apply()
-
-    var modelPath: String
-        get() = prefs.getString("model_path", "") ?: ""
-        set(v) = prefs.edit().putString("model_path", v).apply()
-            var zenmuxKey: String
-        get() = prefs.getString("zenmux_key", "") ?: ""
-        set(value) = prefs.edit().putString("zenmux_key", value).apply()
-
-    var zenmuxModel: String
-        get() = prefs.getString("zenmux_model", "z-ai/glm-5.3-free") ?: "z-ai/glm-5.3-free"
-        set(value) = prefs.edit().putString("zenmux_model", value).apply()
-
-    var zenmuxUrl: String
-        get() = prefs.getString("zenmux_url", "https://zenmux.ai/api/chat/completions") ?: "https://zenmux.ai/api/chat/completions"
-        set(value) = prefs.edit().putString("zenmux_url", value).apply()
-
-    var modelDownloaded: Boolean
-        get() = prefs.getBoolean("model_downloaded", false)
-        set(v) = prefs.edit().putBoolean("model_downloaded", v).apply()
+    fun clearProvider() {
+        prefs.edit()
+            .remove("provider_name")
+            .remove("provider_url")
+            .remove("provider_key")
+            .remove("provider_model")
+            .apply()
+    }
 }
