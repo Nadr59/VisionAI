@@ -5,10 +5,10 @@ import androidx.room.PrimaryKey
 
 @Entity(tableName = "analyses")
 data class AnalysisEntity(
-    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    @PrimaryKey(autoGenerate = true)
+    val id: Long = 0,
     val timestamp: Long = System.currentTimeMillis(),
     val analysisType: String,
-    val aiMode: String,
     val contentType: String,
     val description: String,
     val elements: String,
