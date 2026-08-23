@@ -21,11 +21,18 @@ object CloudVisionManager {
     private const val ASK_URL = "$BASE_URL/ask"
     private const val APP_ID = "vision-ai-01"
 
+    // عميل عام — مهلة طويلة للتحليل
     private val client = OkHttpClient.Builder()
         .connectTimeout(30, TimeUnit.SECONDS)
         .readTimeout(120, TimeUnit.SECONDS)
         .writeTimeout(30, TimeUnit.SECONDS)
         .retryOnConnectionFailure(true)
+        .build()
+
+    // عميل خاص بالفحص — مهلة قصيرة
+    private val statusClient = OkHttpClient.Builder()
+        .connectTimeout(8, TimeUnit.SECONDS)
+        .readTimeout(8, TimeUnit.SECONDS)
         .build()
 
     private var settings: AppSettings? = null
@@ -35,7 +42,7 @@ object CloudVisionManager {
     }
 
     // ═══════════════════════════════════════════
-    //  فحص حالة الخدمة — عبر /api/ask
+    //  فحص حالة الخدمة — سريع
     // ═══════════════════════════════════════════
 
     data class ServiceStatus(
@@ -50,7 +57,7 @@ object CloudVisionManager {
         try {
             val body = JSONObject().apply {
                 put("appId", APP_ID)
-                put("prompt", "ping")
+                put("prompt", "hi")
             }.toString()
 
             val request = Request.Builder()
@@ -59,32 +66,38 @@ object CloudVisionManager {
                 .post(body.toRequestBody("application/json".toMediaType()))
                 .build()
 
-            val response = client.newCall(request).execute()
+            val response = statusClient.newCall(request).execute()
             val responseBody = response.body?.string() ?: ""
 
             when (response.code) {
                 200 -> {
-                    val json = JSONObject(responseBody)
-                    if (json.optBoolean("success")) {
-                        val provider = json.optString("provider", "unknown")
-                        val remaining = json.optInt("remaining", -1)
-                        val modelsArray = json.optJSONArray("models")
-                        val models = mutableListOf<String>()
-                        if (modelsArray != null) {
-                            for (i in 0 until modelsArray.length()) {
-                                models.add(modelsArray.getString(i))
+                    try {
+                        val json = JSONObject(responseBody)
+                        if (json.optBoolean("success")) {
+                            val provider = json.optString("provider", "VisionAI Cloud")
+                            val remaining = json.optInt("remaining", -1)
+                            val modelsArr = json.optJSONArray("models")
+                            val models = mutableListOf<String>()
+                            if (modelsArr != null) {
+                                for (i in 0 until modelsArr.length()) {
+                                    models.add(modelsArr.getString(i))
+                                }
                             }
+                            ServiceStatus(
+                                online = true,
+                                provider = provider,
+                                models = models,
+                                remaining = remaining
+                            )
+                        } else {
+                            ServiceStatus(
+                                online = false,
+                                error = json.optString("error", "خطأ غير معروف")
+                            )
                         }
-                        ServiceStatus(
-                            online = true,
-                            provider = provider,
-                            models = models,
-                            remaining = remaining
-                        )
-                    } else {
-                        ServiceStatus(
-                            error = json.optString("error", "خطأ غير معروف")
-                        )
+                    } catch (e: Exception) {
+                        // الاستجابة ليست JSON — السيرفر متصل لكن الاستجابة غريبة
+                        ServiceStatus(online = true, provider = "متصل")
                     }
                 }
                 403 -> ServiceStatus(error = "التطبيق غير مصرح له بالوصول")
@@ -113,7 +126,7 @@ object CloudVisionManager {
                 val s = settings
                     ?: return@withContext Result.failure(Exception("لم يتم تهيئة الإعدادات"))
 
-                // ═══ 1. مزود مخصص أولاً ═══
+                // مزود مخصص أولاً
                 if (s.providerUrl.isNotBlank() && s.providerKey.isNotBlank()) {
                     val base64 = bitmapToBase64(bitmap, 70)
                     val result = callCustomProvider(
@@ -123,16 +136,16 @@ object CloudVisionManager {
                     if (result.isSuccess) return@withContext result
                 }
 
-                // ═══ 2. VisionAI Cloud (مجاني) ═══
+                // VisionAI Cloud
                 val base64 = bitmapToBase64(bitmap, 70)
                 callVisionCloud(base64, prompt)
             } catch (e: Exception) {
-                Result.failure(e)
+                Result.failure(Exception("خطأ في التحليل: ${e.message}"))
             }
         }
 
     // ═══════════════════════════════════════════
-    //  محادثة نصية فقط (بدون صورة)
+    //  محادثة نصية فقط
     // ═══════════════════════════════════════════
 
     suspend fun analyzeText(prompt: String): Result<String> =
@@ -141,7 +154,7 @@ object CloudVisionManager {
                 val s = settings
                     ?: return@withContext Result.failure(Exception("لم يتم تهيئة الإعدادات"))
 
-                // ═══ 1. مزود مخصص ═══
+                // مزود مخصص
                 if (s.providerUrl.isNotBlank() && s.providerKey.isNotBlank()) {
                     val result = callCustomProviderText(
                         prompt,
@@ -150,15 +163,15 @@ object CloudVisionManager {
                     if (result.isSuccess) return@withContext result
                 }
 
-                // ═══ 2. VisionAI Cloud — ask endpoint ═══
+                // VisionAI Cloud
                 callVisionCloudText(prompt)
             } catch (e: Exception) {
-                Result.failure(e)
+                Result.failure(Exception("خطأ في المحادثة: ${e.message}"))
             }
         }
 
     // ═══════════════════════════════════════════
-    //  VisionAI Cloud — صورة (endpoint: /api/vision)
+    //  VisionAI Cloud — صورة
     // ═══════════════════════════════════════════
 
     private fun callVisionCloud(base64: String, prompt: String): Result<String> {
@@ -182,7 +195,7 @@ object CloudVisionManager {
         } catch (e: java.net.UnknownHostException) {
             Result.failure(Exception("لا يوجد اتصال بالإنترنت"))
         } catch (e: java.net.SocketTimeoutException) {
-            Result.failure(Exception("انتهت مهلة الاتصال — حاول مرة أخرى"))
+            Result.failure(Exception("انتهت مهلة الاتصال"))
         } catch (e: java.net.ConnectException) {
             Result.failure(Exception("فشل الاتصال بالخادم"))
         } catch (e: Exception) {
@@ -191,7 +204,7 @@ object CloudVisionManager {
     }
 
     // ═══════════════════════════════════════════
-    //  VisionAI Cloud — نص فقط (endpoint: /api/ask)
+    //  VisionAI Cloud — نص فقط
     // ═══════════════════════════════════════════
 
     private fun callVisionCloudText(prompt: String): Result<String> {
@@ -242,13 +255,13 @@ object CloudVisionManager {
                         Result.failure(Exception(json.optString("error", "خطأ غير معروف")))
                     }
                 } catch (e: Exception) {
-                    Result.failure(Exception("خطأ في قراءة الاستجابة: ${body.take(200)}"))
+                    Result.failure(Exception("خطأ في قراءة الاستجابة"))
                 }
             }
             403 -> Result.failure(Exception("التطبيق غير مصرح له بالوصول"))
             429 -> Result.failure(Exception("تم تجاوز الحد اليومي للطلبات"))
             503 -> Result.failure(Exception("لا توجد مفاتيح متاحة حالياً"))
-            else -> Result.failure(Exception("خطأ ${code}: ${body.take(200)}"))
+            else -> Result.failure(Exception("خطأ ${code}"))
         }
     }
 
@@ -257,11 +270,8 @@ object CloudVisionManager {
     // ═══════════════════════════════════════════
 
     private fun callCustomProvider(
-        base64: String,
-        prompt: String,
-        url: String,
-        apiKey: String,
-        model: String
+        base64: String, prompt: String,
+        url: String, apiKey: String, model: String
     ): Result<String> {
         return try {
             val messages = JSONArray().apply {
@@ -299,9 +309,7 @@ object CloudVisionManager {
             val responseBody = response.body?.string() ?: ""
 
             if (!response.isSuccessful) {
-                return Result.failure(
-                    Exception("مزود مخصص ${response.code}: ${responseBody.take(200)}")
-                )
+                return Result.failure(Exception("مزود مخصص ${response.code}"))
             }
 
             val json = JSONObject(responseBody)
@@ -321,10 +329,7 @@ object CloudVisionManager {
     // ═══════════════════════════════════════════
 
     private fun callCustomProviderText(
-        prompt: String,
-        url: String,
-        apiKey: String,
-        model: String
+        prompt: String, url: String, apiKey: String, model: String
     ): Result<String> {
         return try {
             val messages = JSONArray().apply {
@@ -351,9 +356,7 @@ object CloudVisionManager {
             val responseBody = response.body?.string() ?: ""
 
             if (!response.isSuccessful) {
-                return Result.failure(
-                    Exception("مزود مخصص ${response.code}: ${responseBody.take(200)}")
-                )
+                return Result.failure(Exception("مزود مخصص ${response.code}"))
             }
 
             val json = JSONObject(responseBody)
