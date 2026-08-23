@@ -27,7 +27,6 @@ object CloudVisionManager {
         settings = appSettings
     }
 
-    // ═══ Bitmap → Base64 ═══
     private fun bitmapToBase64(bitmap: Bitmap, quality: Int): String {
         val maxSize = 1024
         val scale = minOf(
@@ -49,10 +48,6 @@ object CloudVisionManager {
         return Base64.encodeToString(stream.toByteArray(), Base64.NO_WRAP)
     }
 
-    // ═══════════════════════════════════════════
-    //  تحليل صورة — يجرب المزود المخصص أولاً
-    //  ثم ai-key-manager كـ fallback مجاني
-    // ═══════════════════════════════════════════
     suspend fun analyze(bitmap: Bitmap, prompt: String): Result<String> =
         withContext(Dispatchers.IO) {
             try {
@@ -80,10 +75,6 @@ object CloudVisionManager {
             }
         }
 
-    // ═══════════════════════════════════════════
-    //  مزود مخصص — يعمل مع أي API متوافق مع OpenAI
-    //  ZenMux / CometAPI / OpenRouter / أي مزود آخر
-    // ═══════════════════════════════════════════
     private fun callCustomProvider(
         base64: String,
         prompt: String,
@@ -144,9 +135,6 @@ object CloudVisionManager {
         }
     }
 
-    // ═══════════════════════════════════════════
-    //  ai-key-manager — مجاني بدون مفتاح
-    // ═══════════════════════════════════════════
     private fun callKeyManager(base64: String, prompt: String): Result<String> {
         return try {
             val body = JSONObject().apply {
