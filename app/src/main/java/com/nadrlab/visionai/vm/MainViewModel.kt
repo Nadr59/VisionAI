@@ -53,6 +53,31 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val _history = MutableStateFlow<List<AnalysisEntity>>(emptyList())
     val history: StateFlow<List<AnalysisEntity>> = _history
 
+    // ═══ Service Status ═══
+    private val _serviceStatus = MutableStateFlow(CloudVisionManager.ServiceStatus())
+    val serviceStatus: StateFlow<CloudVisionManager.ServiceStatus> = _serviceStatus
+
+    private val _isCheckingStatus = MutableStateFlow(false)
+    val isCheckingStatus: StateFlow<Boolean> = _isCheckingStatus
+
+    // ═══════════════════════════════════════════
+    // SERVICE STATUS
+    // ═══════════════════════════════════════════
+
+    fun checkServiceStatus() {
+        viewModelScope.launch {
+            _isCheckingStatus.value = true
+            try {
+                _serviceStatus.value = CloudVisionManager.checkStatus()
+            } catch (e: Exception) {
+                _serviceStatus.value = CloudVisionManager.ServiceStatus(
+                    error = e.message ?: "خطأ غير معروف"
+                )
+            }
+            _isCheckingStatus.value = false
+        }
+    }
+
     // ═══════════════════════════════════════════
     // IMAGE
     // ═══════════════════════════════════════════
@@ -151,7 +176,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     // ═══════════════════════════════════════════
-    // CHAT — مُصحح: بدون صورة = نص فقط
+    // CHAT
     // ═══════════════════════════════════════════
 
     fun askQuestion(question: String) {
@@ -172,10 +197,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 _chatHistory.value = currentHistory
 
                 val result = if (bitmap != null) {
-                    // مع صورة — نرسل صورة + نص
                     CloudVisionManager.analyze(bitmap, chatPrompt)
                 } else {
-                    // بدون صورة — نرسل نص فقط
                     CloudVisionManager.analyzeText(chatPrompt)
                 }
 
@@ -349,26 +372,3 @@ $context
         _selectedImage.value?.recycle()
     }
 }
-    // ═══════════════════════════════════════════
-    // SERVICE STATUS
-    // ═══════════════════════════════════════════
-
-    private val _serviceStatus = MutableStateFlow(CloudVisionManager.ServiceStatus())
-    val serviceStatus: StateFlow<CloudVisionManager.ServiceStatus> = _serviceStatus
-
-    private val _isCheckingStatus = MutableStateFlow(false)
-    val isCheckingStatus: StateFlow<Boolean> = _isCheckingStatus
-
-    fun checkServiceStatus() {
-        viewModelScope.launch {
-            _isCheckingStatus.value = true
-            try {
-                _serviceStatus.value = CloudVisionManager.checkStatus()
-            } catch (e: Exception) {
-                _serviceStatus.value = CloudVisionManager.ServiceStatus(
-                    error = e.message ?: "خطأ غير معروف"
-                )
-            }
-            _isCheckingStatus.value = false
-        }
-    }
