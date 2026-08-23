@@ -38,6 +38,7 @@ fun MainScreen(vm: MainViewModel) {
 
     var chatInput by remember { mutableStateOf("") }
 
+    // معرض الصور
     val imagePicker = rememberLauncherForActivityResult(
         ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
@@ -46,6 +47,19 @@ fun MainScreen(vm: MainViewModel) {
                 context.contentResolver, it
             )
             vm.selectImage(bitmap, it)
+        }
+    }
+
+    // الكاميرا
+    var cameraUri by remember { mutableStateOf<Uri?>(null) }
+    val cameraLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.TakePicture()
+    ) { success ->
+        if (success && cameraUri != null) {
+            val bitmap = android.provider.MediaStore.Images.Media.getBitmap(
+                context.contentResolver, cameraUri
+            )
+            vm.selectImage(bitmap, cameraUri!!)
         }
     }
 
@@ -94,14 +108,35 @@ fun MainScreen(vm: MainViewModel) {
                                 Icons.Default.AddPhotoAlternate, null,
                                 Modifier.size(48.dp), tint = Color(0xFF38BDF8)
                             )
-                            Text("اضغط لاختيار صورة", color = Color(0xFF888888))
-                            Button(
-                                onClick = { imagePicker.launch("image/*") },
-                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF38BDF8))
-                            ) {
-                                Icon(Icons.Default.Image, null)
-                                Spacer(Modifier.width(8.dp))
-                                Text("اختيار صورة")
+                            Text("اختر صورة للتحليل", color = Color(0xFF888888))
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Button(
+                                    onClick = { imagePicker.launch("image/*") },
+                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF38BDF8))
+                                ) {
+                                    Icon(Icons.Default.Image, null)
+                                    Spacer(Modifier.width(4.dp))
+                                    Text("معرض")
+                                }
+                                Button(
+                                    onClick = {
+                                        val file = java.io.File(
+                                            context.cacheDir,
+                                            "camera_${System.currentTimeMillis()}.jpg"
+                                        )
+                                        cameraUri = androidx.core.content.FileProvider.getUriForFile(
+                                            context,
+                                            "${context.packageName}.fileprovider",
+                                            file
+                                        )
+                                        cameraLauncher.launch(cameraUri!!)
+                                    },
+                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF252542))
+                                ) {
+                                    Icon(Icons.Default.CameraAlt, null)
+                                    Spacer(Modifier.width(4.dp))
+                                    Text("كاميرا")
+                                }
                             }
                         }
                     }
@@ -109,7 +144,7 @@ fun MainScreen(vm: MainViewModel) {
             }
         }
 
-        // ═══ نوع التحليل ═══
+        // ═══ نوع التحليل — Grid بدل Row واحد ═══
         item {
             Card(
                 modifier = Modifier.fillMaxWidth(),
@@ -124,53 +159,53 @@ fun MainScreen(vm: MainViewModel) {
                         fontSize = 14.sp
                     )
                     Spacer(Modifier.height(8.dp))
+
+                    // صف 1: 3 أنواع
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        AnalysisType.entries.take(5).forEach { type ->
-                            FilterChip(
-                                selected = analysisType == type,
-                                onClick = { vm.setAnalysisType(type) },
-                                label = {
-                                    Text(
-                                        type.labelAr, fontSize = 11.sp,
-                                        maxLines = 1, overflow = TextOverflow.Ellipsis
-                                    )
-                                },
-                                modifier = Modifier.weight(1f),
-                                colors = FilterChipDefaults.filterChipColors(
-                                    selectedContainerColor = Color(0xFF38BDF8),
-                                    selectedLabelColor = Color.White,
-                                    containerColor = Color(0xFF252542),
-                                    labelColor = Color(0xFFCCCCCC)
-                                )
-                            )
+                        AnalysisType.entries.take(3).forEach { type ->
+                            AnalysisChip(type, analysisType, vm, Modifier.weight(1f))
                         }
                     }
                     Spacer(Modifier.height(6.dp))
+
+                    // صف 2: 3 أنواع
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        AnalysisType.entries.drop(5).forEach { type ->
-                            FilterChip(
-                                selected = analysisType == type,
-                                onClick = { vm.setAnalysisType(type) },
-                                label = {
-                                    Text(
-                                        type.labelAr, fontSize = 11.sp,
-                                        maxLines = 1, overflow = TextOverflow.Ellipsis
-                                    )
-                                },
-                                modifier = Modifier.weight(1f),
-                                colors = FilterChipDefaults.filterChipColors(
-                                    selectedContainerColor = Color(0xFF38BDF8),
-                                    selectedLabelColor = Color.White,
-                                    containerColor = Color(0xFF252542),
-                                    labelColor = Color(0xFFCCCCCC)
-                                )
-                            )
+                        AnalysisType.entries.drop(3).take(3).forEach { type ->
+                            AnalysisChip(type, analysisType, vm, Modifier.weight(1f))
+                        }
+                    }
+                    Spacer(Modifier.height(6.dp))
+
+                    // صف 3: 3 أنواع
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        AnalysisType.entries.drop(6).take(3).forEach { type ->
+                            AnalysisChip(type, analysisType, vm, Modifier.weight(1f))
+                        }
+                    }
+                    Spacer(Modifier.height(6.dp))
+
+                    // صف 4: 1 نوع
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        AnalysisType.entries.drop(9).forEach { type ->
+                            AnalysisChip(type, analysisType, vm, Modifier.weight(1f))
+                        }
+                        // مساحة فارغة للتوازن
+                        if (AnalysisType.entries.size % 3 != 0) {
+                            repeat(3 - (AnalysisType.entries.size % 3)) {
+                                Spacer(Modifier.weight(1f))
+                            }
                         }
                     }
                 }
@@ -310,6 +345,36 @@ fun MainScreen(vm: MainViewModel) {
     }
 }
 
+// ═══ Chip مساعد ═══
+@Composable
+fun AnalysisChip(
+    type: AnalysisType,
+    selected: AnalysisType,
+    vm: MainViewModel,
+    modifier: Modifier = Modifier
+) {
+    FilterChip(
+        selected = selected == type,
+        onClick = { vm.setAnalysisType(type) },
+        label = {
+            Text(
+                type.labelAr,
+                fontSize = 10.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        },
+        modifier = modifier,
+        colors = FilterChipDefaults.filterChipColors(
+            selectedContainerColor = Color(0xFF38BDF8),
+            selectedLabelColor = Color.White,
+            containerColor = Color(0xFF252542),
+            labelColor = Color(0xFFCCCCCC)
+        )
+    )
+}
+
+// ═══ بطاقة نتيجة التحليل ═══
 @Composable
 fun AnalysisResultCard(result: AnalysisResult) {
     Card(
@@ -376,6 +441,7 @@ fun AnalysisResultCard(result: AnalysisResult) {
     }
 }
 
+// ═══ بطاقة نتيجة بحث ═══
 @Composable
 fun SearchResultCard(result: SearchResult) {
     Card(
