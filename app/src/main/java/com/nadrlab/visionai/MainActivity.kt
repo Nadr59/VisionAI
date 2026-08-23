@@ -43,14 +43,6 @@ fun VisionAINavigation(vm: MainViewModel = viewModel()) {
 
     Scaffold(
         modifier = Modifier.fillMaxSize(),
-        topBar = {
-            TopAppBar(
-                title = { Text("Vision AI") },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surface
-                )
-            )
-        },
         bottomBar = {
             NavigationBar(containerColor = MaterialTheme.colorScheme.surface) {
                 Screen.entries.forEach { screen ->
