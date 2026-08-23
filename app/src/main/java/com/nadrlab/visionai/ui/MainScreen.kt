@@ -24,8 +24,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.FileProvider
 import com.nadrlab.visionai.domain.*
 import com.nadrlab.visionai.vm.MainViewModel
+import java.io.File
 
 @Composable
 fun MainScreen(vm: MainViewModel) {
@@ -35,6 +37,8 @@ fun MainScreen(vm: MainViewModel) {
     val analysisType by vm.analysisType.collectAsState()
     val chatHistory by vm.chatHistory.collectAsState()
     val isChatLoading by vm.isChatLoading.collectAsState()
+    val serviceStatus by vm.serviceStatus.collectAsState()
+    val isCheckingStatus by vm.isCheckingStatus.collectAsState()
 
     var chatInput by remember { mutableStateOf("") }
 
@@ -55,25 +59,36 @@ fun MainScreen(vm: MainViewModel) {
     val cameraLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.TakePicture()
     ) { success ->
-        if (success && cameraUri != null) {
-            val bitmap = android.provider.MediaStore.Images.Media.getBitmap(
-                context.contentResolver, cameraUri
-            )
-            vm.selectImage(bitmap, cameraUri!!)
+        if (success) {
+            val uri = cameraUri
+            if (uri != null) {
+                val bitmap = android.provider.MediaStore.Images.Media.getBitmap(
+                    context.contentResolver, uri
+                )
+                vm.selectImage(bitmap, uri)
+            }
         }
     }
 
+    // فحص الخدمة
+    LaunchedEffect(Unit) {
+        vm.checkServiceStatus()
+    }
+
     LazyColumn(
-                // ═══ بطاقة حالة الخدمة ═══
-        item {
-            ServiceStatusCard(vm)
-        }
         modifier = Modifier
             .fillMaxSize()
             .background(Color(0xFF0D0D0D))
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
+        // ═══ بطاقة حالة الخدمة ═══
+        item {
+            ServiceStatusCard(status = serviceStatus, isChecking = isCheckingStatus) {
+                vm.checkServiceStatus()
+            }
+        }
+
         // ═══ صورة ═══
         item {
             Card(
@@ -116,7 +131,9 @@ fun MainScreen(vm: MainViewModel) {
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 Button(
                                     onClick = { imagePicker.launch("image/*") },
-                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF38BDF8))
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = Color(0xFF38BDF8)
+                                    )
                                 ) {
                                     Icon(Icons.Default.Image, null)
                                     Spacer(Modifier.width(4.dp))
@@ -124,18 +141,21 @@ fun MainScreen(vm: MainViewModel) {
                                 }
                                 Button(
                                     onClick = {
-                                        val file = java.io.File(
+                                        val file = File(
                                             context.cacheDir,
                                             "camera_${System.currentTimeMillis()}.jpg"
                                         )
-                                        cameraUri = androidx.core.content.FileProvider.getUriForFile(
+                                        val uri = FileProvider.getUriForFile(
                                             context,
                                             "${context.packageName}.fileprovider",
                                             file
                                         )
-                                        cameraLauncher.launch(cameraUri!!)
+                                        cameraUri = uri
+                                        cameraLauncher.launch(uri)
                                     },
-                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF252542))
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = Color(0xFF252542)
+                                    )
                                 ) {
                                     Icon(Icons.Default.CameraAlt, null)
                                     Spacer(Modifier.width(4.dp))
@@ -148,7 +168,7 @@ fun MainScreen(vm: MainViewModel) {
             }
         }
 
-        // ═══ نوع التحليل — Grid بدل Row واحد ═══
+        // ═══ نوع التحليل ═══
         item {
             Card(
                 modifier = Modifier.fillMaxWidth(),
@@ -164,53 +184,27 @@ fun MainScreen(vm: MainViewModel) {
                     )
                     Spacer(Modifier.height(8.dp))
 
-                    // صف 1: 3 أنواع
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        AnalysisType.entries.take(3).forEach { type ->
-                            AnalysisChip(type, analysisType, vm, Modifier.weight(1f))
-                        }
-                    }
-                    Spacer(Modifier.height(6.dp))
+                    val types = AnalysisType.entries
+                    val rows = types.chunked(3)
 
-                    // صف 2: 3 أنواع
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        AnalysisType.entries.drop(3).take(3).forEach { type ->
-                            AnalysisChip(type, analysisType, vm, Modifier.weight(1f))
-                        }
-                    }
-                    Spacer(Modifier.height(6.dp))
-
-                    // صف 3: 3 أنواع
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        AnalysisType.entries.drop(6).take(3).forEach { type ->
-                            AnalysisChip(type, analysisType, vm, Modifier.weight(1f))
-                        }
-                    }
-                    Spacer(Modifier.height(6.dp))
-
-                    // صف 4: 1 نوع
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        AnalysisType.entries.drop(9).forEach { type ->
-                            AnalysisChip(type, analysisType, vm, Modifier.weight(1f))
-                        }
-                        // مساحة فارغة للتوازن
-                        if (AnalysisType.entries.size % 3 != 0) {
-                            repeat(3 - (AnalysisType.entries.size % 3)) {
+                    rows.forEach { rowTypes ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            rowTypes.forEach { type ->
+                                AnalysisChip(
+                                    type = type,
+                                    selected = analysisType,
+                                    onSelect = { vm.setAnalysisType(it) },
+                                    modifier = Modifier.weight(1f)
+                                )
+                            }
+                            repeat(3 - rowTypes.size) {
                                 Spacer(Modifier.weight(1f))
                             }
                         }
+                        Spacer(Modifier.height(6.dp))
                     }
                 }
             }
@@ -226,7 +220,9 @@ fun MainScreen(vm: MainViewModel) {
                 colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF38BDF8))
             ) {
                 if (state.isLoading) {
-                    CircularProgressIndicator(Modifier.size(24.dp), Color.White, strokeWidth = 2.dp)
+                    CircularProgressIndicator(
+                        Modifier.size(24.dp), Color.White, strokeWidth = 2.dp
+                    )
                     Spacer(Modifier.width(8.dp))
                     Text(state.progress.ifBlank { "جاري التحليل..." })
                 } else {
@@ -241,10 +237,15 @@ fun MainScreen(vm: MainViewModel) {
         if (state.error.isNotBlank()) {
             item {
                 Card(
-                    colors = CardDefaults.cardColors(containerColor = Color(0xFFFF6B6B).copy(0.1f)),
+                    colors = CardDefaults.cardColors(
+                        containerColor = Color(0xFFFF6B6B).copy(0.1f)
+                    ),
                     shape = RoundedCornerShape(12.dp)
                 ) {
-                    Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Row(
+                        Modifier.padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
                         Icon(Icons.Default.Error, null, tint = Color(0xFFFF6B6B))
                         Spacer(Modifier.width(8.dp))
                         Text(state.error, color = Color(0xFFFF6B6B))
@@ -314,7 +315,9 @@ fun MainScreen(vm: MainViewModel) {
                                 value = chatInput,
                                 onValueChange = { chatInput = it },
                                 modifier = Modifier.weight(1f),
-                                placeholder = { Text("اكتب سؤالك...", color = Color(0xFF555555)) },
+                                placeholder = {
+                                    Text("اكتب سؤالك...", color = Color(0xFF555555))
+                                },
                                 singleLine = true,
                                 shape = RoundedCornerShape(12.dp),
                                 textStyle = LocalTextStyle.current.copy(
@@ -354,12 +357,12 @@ fun MainScreen(vm: MainViewModel) {
 fun AnalysisChip(
     type: AnalysisType,
     selected: AnalysisType,
-    vm: MainViewModel,
+    onSelect: (AnalysisType) -> Unit,
     modifier: Modifier = Modifier
 ) {
     FilterChip(
         selected = selected == type,
-        onClick = { vm.setAnalysisType(type) },
+        onClick = { onSelect(type) },
         label = {
             Text(
                 type.labelAr,
@@ -376,6 +379,101 @@ fun AnalysisChip(
             labelColor = Color(0xFFCCCCCC)
         )
     )
+}
+
+// ═══ بطاقة حالة الخدمة ═══
+@Composable
+fun ServiceStatusCard(
+    status: CloudVisionManager.ServiceStatus,
+    isChecking: Boolean,
+    onRefresh: () -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = if (status.online) Color(0xFF1A2E1A) else Color(0xFF2E1A1A)
+        )
+    ) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        modifier = Modifier
+                            .size(10.dp)
+                            .background(
+                                if (status.online) Color(0xFF4CAF50)
+                                else if (status.error.isNotBlank()) Color(0xFFFF6B6B)
+                                else Color(0xFFFF9800),
+                                CircleShape
+                            )
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        if (status.online) "الخدمة متصلة"
+                        else if (status.error.isNotBlank()) "الخدمة غير متاحة"
+                        else "جاري الفحص...",
+                        color = Color.White,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+
+                IconButton(
+                    onClick = onRefresh,
+                    enabled = !isChecking,
+                    modifier = Modifier.size(32.dp)
+                ) {
+                    if (isChecking) {
+                        CircularProgressIndicator(
+                            Modifier.size(18.dp),
+                            strokeWidth = 2.dp,
+                            color = Color(0xFF38BDF8)
+                        )
+                    } else {
+                        Icon(
+                            Icons.Default.Refresh, "تحديث",
+                            modifier = Modifier.size(18.dp),
+                            tint = Color(0xFF38BDF8)
+                        )
+                    }
+                }
+            }
+
+            if (status.provider.isNotBlank()) {
+                Spacer(Modifier.height(4.dp))
+                Text("المزود: ${status.provider}", color = Color(0xFF888888), fontSize = 11.sp)
+            }
+
+            if (status.models.isNotEmpty()) {
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "النماذج: ${status.models.joinToString("، ")}",
+                    color = Color(0xFF38BDF8), fontSize = 11.sp
+                )
+            }
+
+            if (status.remaining >= 0) {
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "الطلبات المتبقية: ${status.remaining}",
+                    color = if (status.remaining > 10) Color(0xFF4CAF50)
+                    else if (status.remaining > 3) Color(0xFFFF9800)
+                    else Color(0xFFFF6B6B),
+                    fontSize = 11.sp
+                )
+            }
+
+            if (status.error.isNotBlank()) {
+                Spacer(Modifier.height(4.dp))
+                Text(status.error, color = Color(0xFFFF6B6B), fontSize = 11.sp)
+            }
+        }
+    }
 }
 
 // ═══ بطاقة نتيجة التحليل ═══
@@ -408,21 +506,33 @@ fun AnalysisResultCard(result: AnalysisResult) {
 
             if (result.elements.isNotEmpty()) {
                 Spacer(Modifier.height(12.dp))
-                Text("العناصر:", fontWeight = FontWeight.Bold, fontSize = 13.sp, color = Color(0xFFE8C547))
+                Text(
+                    "العناصر:", fontWeight = FontWeight.Bold,
+                    fontSize = 13.sp, color = Color(0xFFE8C547)
+                )
                 result.elements.forEach {
-                    Text("• $it", fontSize = 13.sp, color = Color(0xFFCCCCCC), modifier = Modifier.padding(start = 8.dp))
+                    Text(
+                        "• $it", fontSize = 13.sp, color = Color(0xFFCCCCCC),
+                        modifier = Modifier.padding(start = 8.dp)
+                    )
                 }
             }
 
             if (result.extractedText.isNotBlank()) {
                 Spacer(Modifier.height(12.dp))
-                Text("النص المستخرج:", fontWeight = FontWeight.Bold, fontSize = 13.sp, color = Color(0xFFE8C547))
+                Text(
+                    "النص المستخرج:", fontWeight = FontWeight.Bold,
+                    fontSize = 13.sp, color = Color(0xFFE8C547)
+                )
                 Text(result.extractedText, fontSize = 13.sp, color = Color(0xFFCCCCCC))
             }
 
             if (result.keywords.isNotEmpty()) {
                 Spacer(Modifier.height(12.dp))
-                Text("الكلمات المفتاحية:", fontWeight = FontWeight.Bold, fontSize = 13.sp, color = Color(0xFFE8C547))
+                Text(
+                    "الكلمات المفتاحية:", fontWeight = FontWeight.Bold,
+                    fontSize = 13.sp, color = Color(0xFFE8C547)
+                )
                 Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                     result.keywords.take(5).forEach {
                         SuggestionChip(
@@ -467,120 +577,6 @@ fun SearchResultCard(result: SearchResult) {
             }
             Spacer(Modifier.height(4.dp))
             Text(result.source, fontSize = 11.sp, color = Color(0xFF38BDF8))
-        }
-    }
-}
-// ═══ بطاقة حالة الخدمة ═══
-@Composable
-fun ServiceStatusCard(vm: MainViewModel) {
-    val status by vm.serviceStatus.collectAsState()
-    val isChecking by vm.isCheckingStatus.collectAsState()
-
-    // فحص تلقائي عند فتح الشاشة
-    LaunchedEffect(Unit) {
-        vm.checkServiceStatus()
-    }
-
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(12.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = if (status.online) Color(0xFF1A2E1A) else Color(0xFF2E1A1A)
-        )
-    ) {
-        Column(modifier = Modifier.padding(12.dp)) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    // مؤشر الحالة
-                    Box(
-                        modifier = Modifier
-                            .size(10.dp)
-                            .background(
-                                if (status.online) Color(0xFF4CAF50)
-                                else if (status.error.isNotBlank()) Color(0xFFFF6B6B)
-                                else Color(0xFFFF9800),
-                                CircleShape
-                            )
-                    )
-                    Spacer(Modifier.width(8.dp))
-                    Text(
-                        if (status.online) "الخدمة متصلة"
-                        else if (status.error.isNotBlank()) "الخدمة غير متاحة"
-                        else "جاري الفحص...",
-                        color = Color.White,
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
-
-                // زر تحديث
-                IconButton(
-                    onClick = { vm.checkServiceStatus() },
-                    enabled = !isChecking,
-                    modifier = Modifier.size(32.dp)
-                ) {
-                    if (isChecking) {
-                        CircularProgressIndicator(
-                            Modifier.size(18.dp),
-                            strokeWidth = 2.dp,
-                            color = Color(0xFF38BDF8)
-                        )
-                    } else {
-                        Icon(
-                            Icons.Default.Refresh,
-                            "تحديث",
-                            modifier = Modifier.size(18.dp),
-                            tint = Color(0xFF38BDF8)
-                        )
-                    }
-                }
-            }
-
-            // مزود الخدمة
-            if (status.provider.isNotBlank()) {
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    "المزود: ${status.provider}",
-                    color = Color(0xFF888888),
-                    fontSize = 11.sp
-                )
-            }
-
-            // النماذج المتاحة
-            if (status.models.isNotEmpty()) {
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    "النماذج: ${status.models.joinToString("، ")}",
-                    color = Color(0xFF38BDF8),
-                    fontSize = 11.sp
-                )
-            }
-
-            // الطلبات المتبقية
-            if (status.remaining >= 0) {
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    "الطلبات المتبقية: ${status.remaining}",
-                    color = if (status.remaining > 10) Color(0xFF4CAF50)
-                    else if (status.remaining > 3) Color(0xFFFF9800)
-                    else Color(0xFFFF6B6B),
-                    fontSize = 11.sp
-                )
-            }
-
-            // رسالة خطأ
-            if (status.error.isNotBlank()) {
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    status.error,
-                    color = Color(0xFFFF6B6B),
-                    fontSize = 11.sp
-                )
-            }
         }
     }
 }
