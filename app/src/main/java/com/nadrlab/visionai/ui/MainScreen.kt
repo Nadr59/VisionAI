@@ -64,6 +64,10 @@ fun MainScreen(vm: MainViewModel) {
     }
 
     LazyColumn(
+                // ═══ بطاقة حالة الخدمة ═══
+        item {
+            ServiceStatusCard(vm)
+        }
         modifier = Modifier
             .fillMaxSize()
             .background(Color(0xFF0D0D0D))
@@ -463,6 +467,120 @@ fun SearchResultCard(result: SearchResult) {
             }
             Spacer(Modifier.height(4.dp))
             Text(result.source, fontSize = 11.sp, color = Color(0xFF38BDF8))
+        }
+    }
+}
+// ═══ بطاقة حالة الخدمة ═══
+@Composable
+fun ServiceStatusCard(vm: MainViewModel) {
+    val status by vm.serviceStatus.collectAsState()
+    val isChecking by vm.isCheckingStatus.collectAsState()
+
+    // فحص تلقائي عند فتح الشاشة
+    LaunchedEffect(Unit) {
+        vm.checkServiceStatus()
+    }
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = if (status.online) Color(0xFF1A2E1A) else Color(0xFF2E1A1A)
+        )
+    ) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    // مؤشر الحالة
+                    Box(
+                        modifier = Modifier
+                            .size(10.dp)
+                            .background(
+                                if (status.online) Color(0xFF4CAF50)
+                                else if (status.error.isNotBlank()) Color(0xFFFF6B6B)
+                                else Color(0xFFFF9800),
+                                CircleShape
+                            )
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        if (status.online) "الخدمة متصلة"
+                        else if (status.error.isNotBlank()) "الخدمة غير متاحة"
+                        else "جاري الفحص...",
+                        color = Color.White,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+
+                // زر تحديث
+                IconButton(
+                    onClick = { vm.checkServiceStatus() },
+                    enabled = !isChecking,
+                    modifier = Modifier.size(32.dp)
+                ) {
+                    if (isChecking) {
+                        CircularProgressIndicator(
+                            Modifier.size(18.dp),
+                            strokeWidth = 2.dp,
+                            color = Color(0xFF38BDF8)
+                        )
+                    } else {
+                        Icon(
+                            Icons.Default.Refresh,
+                            "تحديث",
+                            modifier = Modifier.size(18.dp),
+                            tint = Color(0xFF38BDF8)
+                        )
+                    }
+                }
+            }
+
+            // مزود الخدمة
+            if (status.provider.isNotBlank()) {
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "المزود: ${status.provider}",
+                    color = Color(0xFF888888),
+                    fontSize = 11.sp
+                )
+            }
+
+            // النماذج المتاحة
+            if (status.models.isNotEmpty()) {
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "النماذج: ${status.models.joinToString("، ")}",
+                    color = Color(0xFF38BDF8),
+                    fontSize = 11.sp
+                )
+            }
+
+            // الطلبات المتبقية
+            if (status.remaining >= 0) {
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "الطلبات المتبقية: ${status.remaining}",
+                    color = if (status.remaining > 10) Color(0xFF4CAF50)
+                    else if (status.remaining > 3) Color(0xFFFF9800)
+                    else Color(0xFFFF6B6B),
+                    fontSize = 11.sp
+                )
+            }
+
+            // رسالة خطأ
+            if (status.error.isNotBlank()) {
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    status.error,
+                    color = Color(0xFFFF6B6B),
+                    fontSize = 11.sp
+                )
+            }
         }
     }
 }
