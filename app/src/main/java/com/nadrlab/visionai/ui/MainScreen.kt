@@ -25,6 +25,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.FileProvider
+import com.nadrlab.visionai.ai.CloudVisionManager
 import com.nadrlab.visionai.domain.*
 import com.nadrlab.visionai.vm.MainViewModel
 import java.io.File
@@ -42,7 +43,6 @@ fun MainScreen(vm: MainViewModel) {
 
     var chatInput by remember { mutableStateOf("") }
 
-    // معرض الصور
     val imagePicker = rememberLauncherForActivityResult(
         ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
@@ -54,7 +54,6 @@ fun MainScreen(vm: MainViewModel) {
         }
     }
 
-    // الكاميرا
     var cameraUri by remember { mutableStateOf<Uri?>(null) }
     val cameraLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.TakePicture()
@@ -70,7 +69,6 @@ fun MainScreen(vm: MainViewModel) {
         }
     }
 
-    // فحص الخدمة
     LaunchedEffect(Unit) {
         vm.checkServiceStatus()
     }
@@ -84,9 +82,11 @@ fun MainScreen(vm: MainViewModel) {
     ) {
         // ═══ بطاقة حالة الخدمة ═══
         item {
-            ServiceStatusCard(status = serviceStatus, isChecking = isCheckingStatus) {
-                vm.checkServiceStatus()
-            }
+            ServiceStatusCard(
+                status = serviceStatus,
+                isChecking = isCheckingStatus,
+                onRefresh = { vm.checkServiceStatus() }
+            )
         }
 
         // ═══ صورة ═══
@@ -446,7 +446,10 @@ fun ServiceStatusCard(
 
             if (status.provider.isNotBlank()) {
                 Spacer(Modifier.height(4.dp))
-                Text("المزود: ${status.provider}", color = Color(0xFF888888), fontSize = 11.sp)
+                Text(
+                    "المزود: ${status.provider}",
+                    color = Color(0xFF888888), fontSize = 11.sp
+                )
             }
 
             if (status.models.isNotEmpty()) {
