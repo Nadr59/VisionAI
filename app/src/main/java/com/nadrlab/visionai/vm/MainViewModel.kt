@@ -349,3 +349,26 @@ $context
         _selectedImage.value?.recycle()
     }
 }
+    // ═══════════════════════════════════════════
+    // SERVICE STATUS
+    // ═══════════════════════════════════════════
+
+    private val _serviceStatus = MutableStateFlow(CloudVisionManager.ServiceStatus())
+    val serviceStatus: StateFlow<CloudVisionManager.ServiceStatus> = _serviceStatus
+
+    private val _isCheckingStatus = MutableStateFlow(false)
+    val isCheckingStatus: StateFlow<Boolean> = _isCheckingStatus
+
+    fun checkServiceStatus() {
+        viewModelScope.launch {
+            _isCheckingStatus.value = true
+            try {
+                _serviceStatus.value = CloudVisionManager.checkStatus()
+            } catch (e: Exception) {
+                _serviceStatus.value = CloudVisionManager.ServiceStatus(
+                    error = e.message ?: "خطأ غير معروف"
+                )
+            }
+            _isCheckingStatus.value = false
+        }
+    }
