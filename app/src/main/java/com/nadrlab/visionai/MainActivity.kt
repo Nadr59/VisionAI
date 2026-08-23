@@ -1,81 +1,47 @@
-package com.nadrlab.visionai
+package com.nadrlab.visionai.ui.theme
 
-import android.os.Bundle
-import androidx.activity.ComponentActivity
-import androidx.activity.compose.setContent
-import androidx.activity.enableEdgeToEdge
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.*
+import android.os.Build
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.*
-import androidx.compose.runtime.*
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.lifecycle.viewmodel.compose.viewModel
-import com.nadrlab.visionai.ui.*
-import com.nadrlab.visionai.ui.theme.VisionAITheme
-import com.nadrlab.visionai.vm.MainViewModel
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 
-class MainActivity : ComponentActivity() {
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-        enableEdgeToEdge()
-        setContent {
-            VisionAITheme {
-                VisionAINavigation()
-            }
-        }
-    }
-}
+private val DarkColorScheme = darkColorScheme(
+    primary = Color(0xFF38BDF8),
+    secondary = Color(0xFF03DAC6),
+    background = Color(0xFF0D0D0D),
+    surface = Color(0xFF1A1A2E),
+    surfaceVariant = Color(0xFF252542),
+    error = Color(0xFFFF6B6B)
+)
 
-enum class Screen(val label: String, val icon: ImageVector) {
-    MAIN("الرئيسية", Icons.Default.Home),
-    CHAT("الشات", Icons.Default.Chat),
-    HISTORY("التاريخ", Icons.Default.History),
-    SETTINGS("الإعدادات", Icons.Default.Settings)
-}
+private val LightColorScheme = lightColorScheme(
+    primary = Color(0xFF38BDF8),
+    secondary = Color(0xFF03DAC6),
+    background = Color(0xFFF5F5FA),
+    surface = Color.White,
+    surfaceVariant = Color(0xFFEEEEF5),
+    error = Color(0xFFFF6B6B)
+)
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun VisionAINavigation(vm: MainViewModel = viewModel()) {
-    var currentScreen by remember { mutableStateOf(Screen.MAIN) }
-
-    Scaffold(
-        modifier = Modifier.fillMaxSize(),
-        topBar = {
-            TopAppBar(
-                title = { Text("Vision AI") },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surface
-                )
-            )
-        },
-        bottomBar = {
-            NavigationBar(containerColor = MaterialTheme.colorScheme.surface) {
-                Screen.entries.forEach { screen ->
-                    NavigationBarItem(
-                        icon = { Icon(screen.icon, contentDescription = screen.label) },
-                        label = { Text(screen.label) },
-                        selected = currentScreen == screen,
-                        onClick = { currentScreen = screen }
-                    )
-                }
-            }
+fun VisionAITheme(
+    darkTheme: Boolean = isSystemInDarkTheme(),
+    content: @Composable () -> Unit
+) {
+    val colorScheme = when {
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
+            val context = LocalContext.current
+            if (darkTheme) dynamicDarkColorScheme(context)
+            else dynamicLightColorScheme(context)
         }
-    ) { padding ->
-        Surface(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding),
-            color = MaterialTheme.colorScheme.background
-        ) {
-            when (currentScreen) {
-                Screen.MAIN -> MainScreen(vm)
-                Screen.CHAT -> ChatScreen(vm)
-                Screen.HISTORY -> HistoryScreen(vm)
-                Screen.SETTINGS -> SettingsScreen(vm)
-            }
-        }
+        darkTheme -> DarkColorScheme
+        else -> LightColorScheme
     }
+
+    MaterialTheme(
+        colorScheme = colorScheme,
+        content = content
+    )
 }
