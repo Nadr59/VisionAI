@@ -1,6 +1,5 @@
 package com.nadrlab.visionai.domain
 
-// ═══ أنواع التحليل ═══
 enum class AnalysisType(val label: String, val labelAr: String, val prompt: String) {
     GENERAL("عام", "تحليل عام", "Analyze this image comprehensively."),
     TECHNICAL("تقني", "تحليل تقني", "Analyze technical details, devices, components, specifications."),
@@ -14,12 +13,10 @@ enum class AnalysisType(val label: String, val labelAr: String, val prompt: Stri
     PHILOSOPHICAL("فلسفي", "تحليل فلسفي", "Provide philosophical interpretation of this image content.")
 }
 
-// ═══ وضع الذكاء الاصطناعي ═══
 enum class AiMode(val label: String) {
     CLOUD("سحابي")
 }
 
-// ═══ مستوى الثقة ═══
 enum class ConfidenceLevel(val label: String, val icon: String) {
     HIGH("مؤكد بدرجة عالية", "🟢"),
     MEDIUM("مرجح", "🟡"),
@@ -27,7 +24,6 @@ enum class ConfidenceLevel(val label: String, val icon: String) {
     UNCERTAIN("غير مؤكد", "🔴")
 }
 
-// ═══ نتيجة التحليل ═══
 data class AnalysisResult(
     val contentType: String = "",
     val description: String = "",
@@ -39,7 +35,6 @@ data class AnalysisResult(
     val fullText: String = ""
 )
 
-// ═══ نتيجة بحث ═══
 data class SearchResult(
     val title: String = "",
     val url: String = "",
@@ -47,7 +42,6 @@ data class SearchResult(
     val source: String = ""
 )
 
-// ═══ حالة التحليل ═══
 data class AnalysisState(
     val isLoading: Boolean = false,
     val isSearching: Boolean = false,
