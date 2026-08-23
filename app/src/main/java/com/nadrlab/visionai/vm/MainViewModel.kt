@@ -12,9 +12,12 @@ import com.nadrlab.visionai.data.AnalysisEntity
 import com.nadrlab.visionai.data.AppDatabase
 import com.nadrlab.visionai.data.AppSettings
 import com.nadrlab.visionai.domain.*
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeout
 
 class MainViewModel(app: Application) : AndroidViewModel(app) {
 
@@ -60,15 +63,29 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val _isCheckingStatus = MutableStateFlow(false)
     val isCheckingStatus: StateFlow<Boolean> = _isCheckingStatus
 
+    private var statusJob: Job? = null
+    private var chatJob: Job? = null
+    private var analysisJob: Job? = null
+
     // ═══════════════════════════════════════════
-    // SERVICE STATUS
+    // SERVICE STATUS — سريع ومنع التكرار
     // ═══════════════════════════════════════════
 
     fun checkServiceStatus() {
-        viewModelScope.launch {
+        // إلغاء أي فحص سابق
+        statusJob?.cancel()
+
+        statusJob = viewModelScope.launch {
             _isCheckingStatus.value = true
             try {
-                _serviceStatus.value = CloudVisionManager.checkStatus()
+                val result = withTimeout(15_000) {
+                    CloudVisionManager.checkStatus()
+                }
+                _serviceStatus.value = result
+            } catch (e: TimeoutCancellationException) {
+                _serviceStatus.value = CloudVisionManager.ServiceStatus(
+                    error = "انتهت مهلة الفحص"
+                )
             } catch (e: Exception) {
                 _serviceStatus.value = CloudVisionManager.ServiceStatus(
                     error = e.message ?: "خطأ غير معروف"
@@ -105,14 +122,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     // ═══════════════════════════════════════════
-    // ANALYSIS
+    // ANALYSIS — مع timeout
     // ═══════════════════════════════════════════
 
     fun analyze() {
         val bitmap = _selectedImage.value ?: return
         val type = _analysisType.value
 
-        viewModelScope.launch {
+        analysisJob?.cancel()
+
+        analysisJob = viewModelScope.launch {
             _state.value = AnalysisState(isLoading = true, progress = "جاري التحليل...")
             _chatHistory.value = emptyList()
             _lastAnalysisText.value = ""
@@ -122,15 +141,19 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 var ocrText = ""
                 if (settings.ocrEnabled) {
                     _state.value = _state.value.copy(progress = "استخراج النصوص...")
-                    ocrText = OcrEngine.recognize(bitmap)
+                    try {
+                        ocrText = OcrEngine.recognize(bitmap)
+                    } catch (_: Exception) {}
                 }
 
                 // Prompt
                 val prompt = buildCloudPrompt(type, ocrText)
 
-                // Cloud analyze
+                // Cloud analyze — مع timeout
                 _state.value = _state.value.copy(progress = "جاري إرسال الصورة للمزود...")
-                val resultText = CloudVisionManager.analyze(bitmap, prompt).getOrElse {
+                val resultText = withTimeout(90_000) {
+                    CloudVisionManager.analyze(bitmap, prompt)
+                }.getOrElse {
                     throw Exception("فشل التحليل: ${it.message}")
                 }
 
@@ -153,7 +176,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     } catch (_: Exception) {}
                 }
 
-                // Update
                 _state.value = AnalysisState(
                     isLoading = false,
                     result = parsed,
@@ -161,59 +183,81 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     usedMode = AiMode.CLOUD
                 )
 
-                // Save
                 if (settings.saveHistory) {
                     saveToHistory(type, parsed, searchResults, _selectedUri.value?.toString() ?: "")
                 }
 
+            } catch (e: TimeoutCancellationException) {
+                _state.value = AnalysisState(
+                    isLoading = false,
+                    error = "انتهت مهلة التحليل — حاول مرة أخرى"
+                )
             } catch (e: Exception) {
                 _state.value = AnalysisState(
                     isLoading = false,
-                    error = "خطأ: ${e.message}"
+                    error = "خطأ: ${e.message ?: "غير معروف"}"
                 )
             }
         }
     }
 
     // ═══════════════════════════════════════════
-    // CHAT
+    // CHAT — مُصحح بالكامل: لا ينهار أبداً
     // ═══════════════════════════════════════════
 
     fun askQuestion(question: String) {
         if (question.isBlank()) return
+        if (_isChatLoading.value) return // منع الإرسال المتكرر
 
-        viewModelScope.launch {
+        chatJob?.cancel()
+
+        chatJob = viewModelScope.launch {
             _isChatLoading.value = true
 
-            val currentHistory = _chatHistory.value.toMutableList()
-            currentHistory.add("USER: $question")
-            _chatHistory.value = currentHistory
-
             try {
+                // ═══ 1. إضافة رسالة المستخدم ═══
+                _chatHistory.value = _chatHistory.value + "USER: $question"
+
+                // ═══ 2. إضافة مؤشر التفكير ═══
+                _chatHistory.value = _chatHistory.value + "AI: 🤔 جاري التفكير..."
+
+                // ═══ 3. بناء الطلب ═══
                 val chatPrompt = buildChatPrompt(question, _lastAnalysisText.value)
                 val bitmap = _selectedImage.value
 
-                currentHistory.add("AI: 🤔 جاري التفكير...")
-                _chatHistory.value = currentHistory
-
-                val result = if (bitmap != null) {
-                    CloudVisionManager.analyze(bitmap, chatPrompt)
-                } else {
-                    CloudVisionManager.analyzeText(chatPrompt)
+                // ═══ 4. استدعاء الذكاء الاصطناعي — مع timeout ═══
+                val result = try {
+                    withTimeout(60_000) {
+                        if (bitmap != null) {
+                            CloudVisionManager.analyze(bitmap, chatPrompt)
+                        } else {
+                            CloudVisionManager.analyzeText(chatPrompt)
+                        }
+                    }
+                } catch (e: TimeoutCancellationException) {
+                    Result.failure(Exception("انتهت مهلة الاتصال — حاول مرة أخرى"))
+                } catch (e: Exception) {
+                    Result.failure(Exception("خطأ: ${e.message ?: "غير معروف"}"))
                 }
 
-                val response = result.getOrElse { "❌ خطأ: ${it.message}" }
+                // ═══ 5. تحديث المحادثة ═══
+                val response = result.getOrElse { "❌ ${it.message}" }
 
-                val finalHistory = _chatHistory.value.toMutableList()
-                finalHistory.removeLast()
-                finalHistory.add("AI: $response")
-                _chatHistory.value = finalHistory
+                // إزالة مؤشر التفكير وإضافة الرد
+                _chatHistory.value = _chatHistory.value
+                    .filterNot { it.contains("جاري التفكير") }
+                    .plus("AI: $response")
 
             } catch (e: Exception) {
-                val errorHistory = _chatHistory.value.toMutableList()
-                errorHistory.removeAll { it.startsWith("AI:") && it.contains("جاري") }
-                errorHistory.add("AI: ❌ خطأ: ${e.message}")
-                _chatHistory.value = errorHistory
+                // ═══ معالجة أي خطأ غير متوقع ═══
+                try {
+                    _chatHistory.value = _chatHistory.value
+                        .filterNot { it.contains("جاري التفكير") }
+                        .plus("AI: ❌ خطأ: ${e.message ?: "غير معروف"}")
+                } catch (_: Exception) {
+                    // إذا فشل كل شيء، أعد تعيين المحادثة
+                    _chatHistory.value = listOf("AI: ❌ حدث خطأ غير متوقع")
+                }
             }
 
             _isChatLoading.value = false
@@ -221,7 +265,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun clearChat() {
+        chatJob?.cancel()
         _chatHistory.value = emptyList()
+        _isChatLoading.value = false
     }
 
     // ═══════════════════════════════════════════
@@ -369,6 +415,9 @@ $context
 
     override fun onCleared() {
         super.onCleared()
+        statusJob?.cancel()
+        chatJob?.cancel()
+        analysisJob?.cancel()
         _selectedImage.value?.recycle()
     }
 }
