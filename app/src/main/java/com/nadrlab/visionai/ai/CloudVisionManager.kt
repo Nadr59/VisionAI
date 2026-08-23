@@ -14,25 +14,27 @@ import org.json.JSONObject
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.TimeUnit
 
+// ═══ استجابة السيرفر — مطابقة لـ SiteManager ═══
+data class ApiResponse(
+    val success: Boolean = false,
+    val response: String = "",
+    val remaining: Int = 0,
+    val provider: String = "",
+    val error: String = ""
+)
+
 object CloudVisionManager {
 
     private const val BASE_URL = "https://ai-key-manager.vercel.app/api"
-    private const val VISION_URL = "$BASE_URL/vision"
     private const val ASK_URL = "$BASE_URL/ask"
     private const val APP_ID = "vision-ai-01"
 
-    // عميل عام — مهلة طويلة للتحليل
+    // ═══ عميل واحد — نفس إعدادات SiteManager ═══
     private val client = OkHttpClient.Builder()
         .connectTimeout(30, TimeUnit.SECONDS)
         .readTimeout(120, TimeUnit.SECONDS)
         .writeTimeout(30, TimeUnit.SECONDS)
         .retryOnConnectionFailure(true)
-        .build()
-
-    // عميل خاص بالفحص — مهلة قصيرة
-    private val statusClient = OkHttpClient.Builder()
-        .connectTimeout(8, TimeUnit.SECONDS)
-        .readTimeout(8, TimeUnit.SECONDS)
         .build()
 
     private var settings: AppSettings? = null
@@ -42,7 +44,7 @@ object CloudVisionManager {
     }
 
     // ═══════════════════════════════════════════
-    //  فحص حالة الخدمة — سريع
+    //  فحص حالة الخدمة — طلب بسيط عبر /api/ask
     // ═══════════════════════════════════════════
 
     data class ServiceStatus(
@@ -55,69 +57,23 @@ object CloudVisionManager {
 
     suspend fun checkStatus(): ServiceStatus = withContext(Dispatchers.IO) {
         try {
-            val body = JSONObject().apply {
-                put("appId", APP_ID)
-                put("prompt", "hi")
-            }.toString()
-
-            val request = Request.Builder()
-                .url(ASK_URL)
-                .addHeader("Content-Type", "application/json; charset=UTF-8")
-                .post(body.toRequestBody("application/json".toMediaType()))
-                .build()
-
-            val response = statusClient.newCall(request).execute()
-            val responseBody = response.body?.string() ?: ""
-
-            when (response.code) {
-                200 -> {
-                    try {
-                        val json = JSONObject(responseBody)
-                        if (json.optBoolean("success")) {
-                            val provider = json.optString("provider", "VisionAI Cloud")
-                            val remaining = json.optInt("remaining", -1)
-                            val modelsArr = json.optJSONArray("models")
-                            val models = mutableListOf<String>()
-                            if (modelsArr != null) {
-                                for (i in 0 until modelsArr.length()) {
-                                    models.add(modelsArr.getString(i))
-                                }
-                            }
-                            ServiceStatus(
-                                online = true,
-                                provider = provider,
-                                models = models,
-                                remaining = remaining
-                            )
-                        } else {
-                            ServiceStatus(
-                                online = false,
-                                error = json.optString("error", "خطأ غير معروف")
-                            )
-                        }
-                    } catch (e: Exception) {
-                        // الاستجابة ليست JSON — السيرفر متصل لكن الاستجابة غريبة
-                        ServiceStatus(online = true, provider = "متصل")
-                    }
-                }
-                403 -> ServiceStatus(error = "التطبيق غير مصرح له بالوصول")
-                429 -> ServiceStatus(error = "تم تجاوز الحد اليومي للطلبات")
-                503 -> ServiceStatus(error = "لا توجد مفاتيح متاحة حالياً")
-                else -> ServiceStatus(error = "خطأ ${response.code}")
+            val response = doAsk("ping")
+            if (response.success) {
+                ServiceStatus(
+                    online = true,
+                    provider = response.provider,
+                    remaining = response.remaining
+                )
+            } else {
+                ServiceStatus(error = response.error.ifBlank { "خطأ غير معروف" })
             }
-        } catch (e: java.net.UnknownHostException) {
-            ServiceStatus(error = "لا يوجد اتصال بالإنترنت")
-        } catch (e: java.net.SocketTimeoutException) {
-            ServiceStatus(error = "انتهت مهلة الاتصال")
-        } catch (e: java.net.ConnectException) {
-            ServiceStatus(error = "فشل الاتصال بالخادم")
         } catch (e: Exception) {
             ServiceStatus(error = e.message ?: "خطأ غير معروف")
         }
     }
 
     // ═══════════════════════════════════════════
-    //  تحليل صورة
+    //  تحليل صورة — عبر /api/ask مع image
     // ═══════════════════════════════════════════
 
     suspend fun analyze(bitmap: Bitmap, prompt: String): Result<String> =
@@ -136,16 +92,22 @@ object CloudVisionManager {
                     if (result.isSuccess) return@withContext result
                 }
 
-                // VisionAI Cloud
+                // VisionAI Cloud — /api/ask مع صورة
                 val base64 = bitmapToBase64(bitmap, 70)
-                callVisionCloud(base64, prompt)
+                val response = doAskWithImage(prompt, base64)
+
+                if (response.success && response.response.isNotBlank()) {
+                    Result.success(response.response)
+                } else {
+                    Result.failure(Exception(response.error.ifBlank { "لا يوجد محتوى" }))
+                }
             } catch (e: Exception) {
                 Result.failure(Exception("خطأ في التحليل: ${e.message}"))
             }
         }
 
     // ═══════════════════════════════════════════
-    //  محادثة نصية فقط
+    //  محادثة نصية فقط — عبر /api/ask
     // ═══════════════════════════════════════════
 
     suspend fun analyzeText(prompt: String): Result<String> =
@@ -154,7 +116,7 @@ object CloudVisionManager {
                 val s = settings
                     ?: return@withContext Result.failure(Exception("لم يتم تهيئة الإعدادات"))
 
-                // مزود مخصص
+                // مزود مخصص أولاً
                 if (s.providerUrl.isNotBlank() && s.providerKey.isNotBlank()) {
                     val result = callCustomProviderText(
                         prompt,
@@ -163,51 +125,24 @@ object CloudVisionManager {
                     if (result.isSuccess) return@withContext result
                 }
 
-                // VisionAI Cloud
-                callVisionCloudText(prompt)
+                // VisionAI Cloud — /api/ask
+                val response = doAsk(prompt)
+
+                if (response.success && response.response.isNotBlank()) {
+                    Result.success(response.response)
+                } else {
+                    Result.failure(Exception(response.error.ifBlank { "لا يوجد محتوى" }))
+                }
             } catch (e: Exception) {
                 Result.failure(Exception("خطأ في المحادثة: ${e.message}"))
             }
         }
 
     // ═══════════════════════════════════════════
-    //  VisionAI Cloud — صورة
+    //  /api/ask — نص فقط (مطابق لـ SiteManager)
     // ═══════════════════════════════════════════
 
-    private fun callVisionCloud(base64: String, prompt: String): Result<String> {
-        return try {
-            val body = JSONObject().apply {
-                put("appId", APP_ID)
-                put("prompt", prompt)
-                put("image", "data:image/jpeg;base64,$base64")
-            }.toString()
-
-            val request = Request.Builder()
-                .url(VISION_URL)
-                .addHeader("Content-Type", "application/json; charset=UTF-8")
-                .post(body.toRequestBody("application/json".toMediaType()))
-                .build()
-
-            val response = client.newCall(request).execute()
-            val responseBody = response.body?.string() ?: ""
-
-            parseCloudResponse(response.code, responseBody)
-        } catch (e: java.net.UnknownHostException) {
-            Result.failure(Exception("لا يوجد اتصال بالإنترنت"))
-        } catch (e: java.net.SocketTimeoutException) {
-            Result.failure(Exception("انتهت مهلة الاتصال"))
-        } catch (e: java.net.ConnectException) {
-            Result.failure(Exception("فشل الاتصال بالخادم"))
-        } catch (e: Exception) {
-            Result.failure(Exception(e.message ?: "خطأ غير معروف"))
-        }
-    }
-
-    // ═══════════════════════════════════════════
-    //  VisionAI Cloud — نص فقط
-    // ═══════════════════════════════════════════
-
-    private fun callVisionCloudText(prompt: String): Result<String> {
+    private fun doAsk(prompt: String): ApiResponse {
         return try {
             val body = JSONObject().apply {
                 put("appId", APP_ID)
@@ -223,45 +158,86 @@ object CloudVisionManager {
             val response = client.newCall(request).execute()
             val responseBody = response.body?.string() ?: ""
 
-            parseCloudResponse(response.code, responseBody)
+            when (response.code) {
+                200 -> {
+                    try {
+                        val json = JSONObject(responseBody)
+                        ApiResponse(
+                            success = json.optBoolean("success", false),
+                            response = json.optString("response", ""),
+                            remaining = json.optInt("remaining", 0),
+                            provider = json.optString("provider", ""),
+                            error = json.optString("error", "")
+                        )
+                    } catch (e: Exception) {
+                        ApiResponse(error = "خطأ في قراءة الاستجابة")
+                    }
+                }
+                403 -> ApiResponse(error = "التطبيق غير مصرح له بالوصول")
+                429 -> ApiResponse(error = "تم تجاوز الحد اليومي للطلبات")
+                503 -> ApiResponse(error = "لا توجد مفاتيح متاحة حالياً")
+                else -> ApiResponse(error = "خطأ ${response.code}: ${responseBody.take(150)}")
+            }
         } catch (e: java.net.UnknownHostException) {
-            Result.failure(Exception("لا يوجد اتصال بالإنترنت"))
+            ApiResponse(error = "لا يوجد اتصال بالإنترنت")
         } catch (e: java.net.SocketTimeoutException) {
-            Result.failure(Exception("انتهت مهلة الاتصال"))
+            ApiResponse(error = "انتهت مهلة الاتصال — حاول مرة أخرى")
         } catch (e: java.net.ConnectException) {
-            Result.failure(Exception("فشل الاتصال بالخادم"))
+            ApiResponse(error = "فشل الاتصال بالخادم")
         } catch (e: Exception) {
-            Result.failure(Exception(e.message ?: "خطأ غير معروف"))
+            ApiResponse(error = e.message ?: "خطأ غير معروف")
         }
     }
 
     // ═══════════════════════════════════════════
-    //  تحليل استجابة السيرفر
+    //  /api/ask — مع صورة
     // ═══════════════════════════════════════════
 
-    private fun parseCloudResponse(code: Int, body: String): Result<String> {
-        return when (code) {
-            200 -> {
-                try {
-                    val json = JSONObject(body)
-                    if (json.optBoolean("success")) {
-                        val text = json.optString("response", "")
-                        if (text.isNotBlank()) {
-                            Result.success(text)
-                        } else {
-                            Result.failure(Exception("لا يوجد محتوى في الاستجابة"))
-                        }
-                    } else {
-                        Result.failure(Exception(json.optString("error", "خطأ غير معروف")))
+    private fun doAskWithImage(prompt: String, base64: String): ApiResponse {
+        return try {
+            val body = JSONObject().apply {
+                put("appId", APP_ID)
+                put("prompt", prompt)
+                put("image", "data:image/jpeg;base64,$base64")
+            }.toString()
+
+            val request = Request.Builder()
+                .url(ASK_URL)
+                .addHeader("Content-Type", "application/json; charset=UTF-8")
+                .post(body.toRequestBody("application/json".toMediaType()))
+                .build()
+
+            val response = client.newCall(request).execute()
+            val responseBody = response.body?.string() ?: ""
+
+            when (response.code) {
+                200 -> {
+                    try {
+                        val json = JSONObject(responseBody)
+                        ApiResponse(
+                            success = json.optBoolean("success", false),
+                            response = json.optString("response", ""),
+                            remaining = json.optInt("remaining", 0),
+                            provider = json.optString("provider", ""),
+                            error = json.optString("error", "")
+                        )
+                    } catch (e: Exception) {
+                        ApiResponse(error = "خطأ في قراءة الاستجابة")
                     }
-                } catch (e: Exception) {
-                    Result.failure(Exception("خطأ في قراءة الاستجابة"))
                 }
+                403 -> ApiResponse(error = "التطبيق غير مصرح له بالوصول")
+                429 -> ApiResponse(error = "تم تجاوز الحد اليومي للطلبات")
+                503 -> ApiResponse(error = "لا توجد مفاتيح متاحة حالياً")
+                else -> ApiResponse(error = "خطأ ${response.code}: ${responseBody.take(150)}")
             }
-            403 -> Result.failure(Exception("التطبيق غير مصرح له بالوصول"))
-            429 -> Result.failure(Exception("تم تجاوز الحد اليومي للطلبات"))
-            503 -> Result.failure(Exception("لا توجد مفاتيح متاحة حالياً"))
-            else -> Result.failure(Exception("خطأ ${code}"))
+        } catch (e: java.net.UnknownHostException) {
+            ApiResponse(error = "لا يوجد اتصال بالإنترنت")
+        } catch (e: java.net.SocketTimeoutException) {
+            ApiResponse(error = "انتهت مهلة الاتصال — حاول مرة أخرى")
+        } catch (e: java.net.ConnectException) {
+            ApiResponse(error = "فشل الاتصال بالخادم")
+        } catch (e: Exception) {
+            ApiResponse(error = e.message ?: "خطأ غير معروف")
         }
     }
 
