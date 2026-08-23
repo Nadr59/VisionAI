@@ -42,18 +42,10 @@ fun SettingsScreen(viewModel: MainViewModel) {
             .verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        Text(
-            "الإعدادات",
-            color = Color(0xFF38BDF8),
-            fontSize = 22.sp,
-            fontWeight = FontWeight.Bold
-        )
+        Text("الإعدادات", color = Color(0xFF38BDF8), fontSize = 22.sp, fontWeight = FontWeight.Bold)
 
-        // ═══════════════════════════════════
-        //  المزود السحابي
-        // ═══════════════════════════════════
+        // ═══ المزود السحابي ═══
         SettingsCard("المزود السحابي") {
-            // حالة الاتصال
             Row(
                 Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -70,62 +62,32 @@ fun SettingsScreen(viewModel: MainViewModel) {
 
             Spacer(Modifier.height(12.dp))
 
-            // اسم المزود
-            ProviderField(
-                value = providerName,
-                label = "اسم المزود",
-                placeholder = "مثال: ZenMux"
-            ) {
-                providerName = it
-                settings.providerName = it
+            ProviderField(providerName, "اسم المزود", "مثال: ZenMux") {
+                providerName = it; settings.providerName = it
             }
-
+            Spacer(Modifier.height(8.dp))
+            ProviderField(providerUrl, "رابط API", "https://api.example.com/v1/chat/completions") {
+                providerUrl = it; settings.providerUrl = it
+            }
             Spacer(Modifier.height(8.dp))
 
-            // رابط API
-            ProviderField(
-                value = providerUrl,
-                label = "رابط API",
-                placeholder = "https://api.example.com/v1/chat/completions"
-            ) {
-                providerUrl = it
-                settings.providerUrl = it
-            }
-
-            Spacer(Modifier.height(8.dp))
-
-            // مفتاح API
             OutlinedTextField(
                 value = providerKey,
-                onValueChange = {
-                    providerKey = it
-                    settings.providerKey = it
-                },
-                label = {
-                    Text("مفتاح API", color = Color(0xFF888888), fontSize = 12.sp)
-                },
-                placeholder = {
-                    Text("sk-...", color = Color(0xFF555555), fontSize = 12.sp)
-                },
+                onValueChange = { providerKey = it; settings.providerKey = it },
+                label = { Text("مفتاح API", color = Color(0xFF888888), fontSize = 12.sp) },
+                placeholder = { Text("sk-...", color = Color(0xFF555555), fontSize = 12.sp) },
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
-                visualTransformation = if (showKey) VisualTransformation.None
-                else PasswordVisualTransformation(),
+                visualTransformation = if (showKey) VisualTransformation.None else PasswordVisualTransformation(),
                 trailingIcon = {
                     IconButton(onClick = { showKey = !showKey }) {
                         Icon(
-                            if (showKey) Icons.Default.VisibilityOff
-                            else Icons.Default.Visibility,
-                            contentDescription = null,
-                            tint = Color(0xFF888888),
-                            modifier = Modifier.size(20.dp)
+                            if (showKey) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                            null, tint = Color(0xFF888888), modifier = Modifier.size(20.dp)
                         )
                     }
                 },
-                textStyle = LocalTextStyle.current.copy(
-                    color = Color.White,
-                    fontSize = 13.sp
-                ),
+                textStyle = LocalTextStyle.current.copy(color = Color.White, fontSize = 13.sp),
                 colors = OutlinedTextFieldDefaults.colors(
                     focusedBorderColor = Color(0xFF38BDF8),
                     unfocusedBorderColor = Color(0xFF333355),
@@ -135,58 +97,33 @@ fun SettingsScreen(viewModel: MainViewModel) {
             )
 
             Spacer(Modifier.height(8.dp))
-
-            // اسم النموذج
-            ProviderField(
-                value = providerModel,
-                label = "اسم النموذج",
-                placeholder = "glm-5.3 / gpt-4o / ..."
-            ) {
-                providerModel = it
-                settings.providerModel = it
+            ProviderField(providerModel, "اسم النموذج", "glm-5.3 / gpt-4o / ...") {
+                providerModel = it; settings.providerModel = it
             }
 
             Spacer(Modifier.height(12.dp))
 
-            // ═══ أزرار ═══
-            Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                // نماذج جاهزة
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(
                     onClick = { showPresets = !showPresets },
                     modifier = Modifier.weight(1f),
                     shape = RoundedCornerShape(10.dp),
-                    colors = ButtonDefaults.outlinedButtonColors(
-                        contentColor = Color(0xFF38BDF8)
-                    )
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFF38BDF8))
                 ) {
-                    Icon(
-                        if (showPresets) Icons.Default.ExpandLess
-                        else Icons.Default.Tune,
-                        null,
-                        modifier = Modifier.size(18.dp)
-                    )
+                    Icon(if (showPresets) Icons.Default.ExpandLess else Icons.Default.Tune, null, modifier = Modifier.size(18.dp))
                     Spacer(Modifier.width(4.dp))
                     Text("نماذج جاهزة", fontSize = 12.sp)
                 }
 
-                // مسح
                 if (settings.isCustomProviderConfigured()) {
                     Button(
                         onClick = {
                             settings.clearProvider()
-                            providerName = ""
-                            providerUrl = ""
-                            providerKey = ""
-                            providerModel = "glm-5.3"
+                            providerName = ""; providerUrl = ""; providerKey = ""; providerModel = "glm-5.3"
                         },
                         modifier = Modifier.weight(1f),
                         shape = RoundedCornerShape(10.dp),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = Color(0xFFFF6B6B)
-                        )
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF6B6B))
                     ) {
                         Icon(Icons.Default.Delete, null, modifier = Modifier.size(18.dp))
                         Spacer(Modifier.width(4.dp))
@@ -195,12 +132,8 @@ fun SettingsScreen(viewModel: MainViewModel) {
                 }
             }
 
-            // ═══ قائمة النماذج الجاهزة ═══
             AnimatedVisibility(visible = showPresets) {
-                Column(
-                    modifier = Modifier.padding(top = 8.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
+                Column(modifier = Modifier.padding(top = 8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     PresetButton("ZenMux", "glm-5.3") {
                         providerName = "ZenMux"
                         providerUrl = "https://zenmux.ai/api/v1/chat/completions"
@@ -229,60 +162,33 @@ fun SettingsScreen(viewModel: MainViewModel) {
             }
         }
 
-        // ═══════════════════════════════════
-        //  الميزات
-        // ═══════════════════════════════════
+        // ═══ الميزات ═══
         SettingsCard("الميزات") {
-            SettingsSwitch("استخراج النصوص (OCR)", ocrEnabled) {
-                ocrEnabled = it; settings.ocrEnabled = it
-            }
-            SettingsSwitch("البحث في الإنترنت", searchEnabled) {
-                searchEnabled = it; settings.searchEnabled = it
-            }
-            SettingsSwitch("حفظ سجل التحليلات", saveHistory) {
-                saveHistory = it; settings.saveHistory = it
-            }
+            SettingsSwitch("استخراج النصوص (OCR)", ocrEnabled) { ocrEnabled = it; settings.ocrEnabled = it }
+            SettingsSwitch("البحث في الإنترنت", searchEnabled) { searchEnabled = it; settings.searchEnabled = it }
+            SettingsSwitch("حفظ سجل التحليلات", saveHistory) { saveHistory = it; settings.saveHistory = it }
         }
 
-        // ═══════════════════════════════════
-        //  الخصوصية
-        // ═══════════════════════════════════
+        // ═══ الخصوصية ═══
         SettingsCard("الخصوصية") {
-            Text(
-                "بدون مزود مخصص: الصورة تُرسل لـ VisionAI Cloud المجاني",
-                color = Color(0xFFFF9800),
-                fontSize = 12.sp
-            )
+            Text("بدون مزود مخصص: الصورة تُرسل لـ VisionAI Cloud المجاني", color = Color(0xFFFF9800), fontSize = 12.sp)
             Spacer(Modifier.height(4.dp))
-            Text(
-                "مع مزود مخصص: الصورة تُرسل للمزود الذي اخترته",
-                color = Color(0xFF38BDF8),
-                fontSize = 12.sp
-            )
+            Text("مع مزود مخصص: الصورة تُرسل للمزود الذي اخترته", color = Color(0xFF38BDF8), fontSize = 12.sp)
             Spacer(Modifier.height(4.dp))
-            Text(
-                "الشات يستخدم نفس المزود النشط",
-                color = Color(0xFF888888),
-                fontSize = 11.sp
-            )
+            Text("الشات يستخدم نفس المزود النشط", color = Color(0xFF888888), fontSize = 11.sp)
         }
 
-        // ═══════════════════════════════════
-        //  معلومات
-        // ═══════════════════════════════════
+        // ═══ حول ═══
         SettingsCard("حول التطبيق") {
             Text("Vision AI v2.0", color = Color(0xFF38BDF8), fontSize = 14.sp, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(4.dp))
             Text("تحليل صور + محادثة بالذكاء الاصطناعي", color = Color(0xFF888888), fontSize = 12.sp)
-            Spacer(Modifier.height(4.dp))
-            Text("يدعم أي API متوافق مع OpenAI", color = Color(0xFF666666), fontSize = 11.sp)
         }
 
         Spacer(Modifier.height(80.dp))
     }
 }
 
-// ═══ بطاقة إعدادات ═══
 @Composable
 fun SettingsCard(title: String, content: @Composable ColumnScope.() -> Unit) {
     Card(
@@ -297,46 +203,27 @@ fun SettingsCard(title: String, content: @Composable ColumnScope.() -> Unit) {
     }
 }
 
-// ═══ مفتاح اختيار ═══
 @Composable
 fun SettingsSwitch(label: String, checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
-    Row(
-        Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween
-    ) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
         Text(label, color = Color.White, fontSize = 13.sp)
         Switch(
-            checked = checked,
-            onCheckedChange = onCheckedChange,
+            checked = checked, onCheckedChange = onCheckedChange,
             colors = SwitchDefaults.colors(checkedTrackColor = Color(0xFF38BDF8))
         )
     }
 }
 
-// ═══ حقل إدخال المزود ═══
 @Composable
-fun ProviderField(
-    value: String,
-    label: String,
-    placeholder: String,
-    onValueChange: (String) -> Unit
-) {
+fun ProviderField(value: String, label: String, placeholder: String, onValueChange: (String) -> Unit) {
     OutlinedTextField(
         value = value,
         onValueChange = onValueChange,
-        label = {
-            Text(label, color = Color(0xFF888888), fontSize = 12.sp)
-        },
-        placeholder = {
-            Text(placeholder, color = Color(0xFF555555), fontSize = 12.sp)
-        },
+        label = { Text(label, color = Color(0xFF888888), fontSize = 12.sp) },
+        placeholder = { Text(placeholder, color = Color(0xFF555555), fontSize = 12.sp) },
         modifier = Modifier.fillMaxWidth(),
         singleLine = true,
-        textStyle = LocalTextStyle.current.copy(
-            color = Color.White,
-            fontSize = 13.sp
-        ),
+        textStyle = LocalTextStyle.current.copy(color = Color.White, fontSize = 13.sp),
         colors = OutlinedTextFieldDefaults.colors(
             focusedBorderColor = Color(0xFF38BDF8),
             unfocusedBorderColor = Color(0xFF333355),
@@ -346,21 +233,15 @@ fun ProviderField(
     )
 }
 
-// ═══ زر نموذج جاهز ═══
 @Composable
 fun PresetButton(name: String, model: String, onClick: () -> Unit) {
     OutlinedButton(
         onClick = onClick,
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(8.dp),
-        colors = ButtonDefaults.outlinedButtonColors(
-            contentColor = Color.White
-        )
+        colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White)
     ) {
-        Column(
-            Modifier.fillMaxWidth(),
-            horizontalAlignment = Alignment.Start
-        ) {
+        Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.Start) {
             Text(name, fontWeight = FontWeight.Bold, fontSize = 13.sp)
             Text(model, fontSize = 10.sp, color = Color(0xFF888888))
         }
