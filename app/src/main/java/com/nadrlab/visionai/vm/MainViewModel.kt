@@ -151,7 +151,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     // ═══════════════════════════════════════════
-    // CHAT
+    // CHAT — مُصحح: بدون صورة = نص فقط
     // ═══════════════════════════════════════════
 
     fun askQuestion(question: String) {
@@ -172,9 +172,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 _chatHistory.value = currentHistory
 
                 val result = if (bitmap != null) {
+                    // مع صورة — نرسل صورة + نص
                     CloudVisionManager.analyze(bitmap, chatPrompt)
                 } else {
-                    CloudVisionManager.analyze(createBlankBitmap(), chatPrompt)
+                    // بدون صورة — نرسل نص فقط
+                    CloudVisionManager.analyzeText(chatPrompt)
                 }
 
                 val response = result.getOrElse { "❌ خطأ: ${it.message}" }
@@ -193,10 +195,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
             _isChatLoading.value = false
         }
-    }
-
-    private fun createBlankBitmap(): Bitmap {
-        return Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888)
     }
 
     fun clearChat() {
