@@ -71,10 +71,8 @@ fun ChatScreen(vm: MainViewModel) {
                     ) {
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
                             Icon(
-                                Icons.Default.ChatBubbleOutline,
-                                null,
-                                modifier = Modifier.size(64.dp),
-                                tint = Color(0xFF555555)
+                                Icons.Default.ChatBubbleOutline, null,
+                                modifier = Modifier.size(64.dp), tint = Color(0xFF555555)
                             )
                             Spacer(Modifier.height(12.dp))
                             Text("ابدأ محادثة مع Vision AI", color = Color(0xFF888888), fontSize = 16.sp)
