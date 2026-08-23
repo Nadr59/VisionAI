@@ -37,7 +37,12 @@ fun ChatScreen(vm: MainViewModel) {
         }
     }
 
-    Column(modifier = Modifier.fillMaxSize().background(Color(0xFF0D0D0D))) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color(0xFF0D0D0D))
+            .imePadding()
+    ) {
         // ═══ Header ═══
         if (selectedImage != null) {
             Card(
@@ -147,14 +152,17 @@ fun ChatScreen(vm: MainViewModel) {
             }
         }
 
-        // ═══ Input ═══
+        // ═══ Input — يرتفع مع لوحة المفاتيح ═══
         Card(
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp),
             colors = CardDefaults.cardColors(containerColor = Color(0xFF1A1A2E))
         ) {
             Row(
-                modifier = Modifier.fillMaxWidth().padding(12.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(12.dp)
+                    .navigationBarsPadding(),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
