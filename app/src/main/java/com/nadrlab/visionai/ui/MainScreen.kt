@@ -1,6 +1,10 @@
 package com.nadrlab.visionai.ui
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.graphics.BitmapFactory
 import android.net.Uri
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
@@ -24,6 +28,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import com.nadrlab.visionai.ai.CloudVisionManager
 import com.nadrlab.visionai.domain.*
@@ -43,32 +48,96 @@ fun MainScreen(vm: MainViewModel) {
 
     var chatInput by remember { mutableStateOf("") }
 
+    // ═══ معرض الصور ═══
     val imagePicker = rememberLauncherForActivityResult(
         ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
         uri?.let {
-            val bitmap = android.provider.MediaStore.Images.Media.getBitmap(
-                context.contentResolver, it
-            )
-            vm.selectImage(bitmap, it)
-        }
-    }
-
-    var cameraUri by remember { mutableStateOf<Uri?>(null) }
-    val cameraLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.TakePicture()
-    ) { success ->
-        if (success) {
-            val uri = cameraUri
-            if (uri != null) {
-                val bitmap = android.provider.MediaStore.Images.Media.getBitmap(
-                    context.contentResolver, uri
-                )
-                vm.selectImage(bitmap, uri)
+            try {
+                val inputStream = context.contentResolver.openInputStream(it)
+                val bitmap = BitmapFactory.decodeStream(inputStream)
+                inputStream?.close()
+                if (bitmap != null) {
+                    vm.selectImage(bitmap, it)
+                }
+            } catch (e: Exception) {
+                Toast.makeText(context, "فشل تحميل الصورة: ${e.message}", Toast.LENGTH_SHORT).show()
             }
         }
     }
 
+    // ═══ الكاميرا — تخزين URI مؤقت ═══
+    var tempCameraUri by remember { mutableStateOf<Uri?>(null) }
+
+    val cameraLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.TakePicture()
+    ) { success: Boolean ->
+        if (success) {
+            val uri = tempCameraUri
+            if (uri != null) {
+                try {
+                    val inputStream = context.contentResolver.openInputStream(uri)
+                    val bitmap = BitmapFactory.decodeStream(inputStream)
+                    inputStream?.close()
+                    if (bitmap != null) {
+                        vm.selectImage(bitmap, uri)
+                    } else {
+                        Toast.makeText(context, "فشل قراءة الصورة", Toast.LENGTH_SHORT).show()
+                    }
+                } catch (e: Exception) {
+                    Toast.makeText(context, "خطأ: ${e.message}", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+    }
+
+    // ═══ طلب إذن الكاميرا ═══
+    val cameraPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted: Boolean ->
+        if (granted) {
+            try {
+                val file = File(context.cacheDir, "photo_${System.currentTimeMillis()}.jpg")
+                val uri = FileProvider.getUriForFile(
+                    context,
+                    "${context.packageName}.fileprovider",
+                    file
+                )
+                tempCameraUri = uri
+                cameraLauncher.launch(uri)
+            } catch (e: Exception) {
+                Toast.makeText(context, "فشل فتح الكاميرا: ${e.message}", Toast.LENGTH_SHORT).show()
+            }
+        } else {
+            Toast.makeText(context, "إذن الكاميرا مطلوب", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    // دالة فتح الكاميرا
+    fun openCamera() {
+        val hasPermission = ContextCompat.checkSelfPermission(
+            context, Manifest.permission.CAMERA
+        ) == PackageManager.PERMISSION_GRANTED
+
+        if (hasPermission) {
+            try {
+                val file = File(context.cacheDir, "photo_${System.currentTimeMillis()}.jpg")
+                val uri = FileProvider.getUriForFile(
+                    context,
+                    "${context.packageName}.fileprovider",
+                    file
+                )
+                tempCameraUri = uri
+                cameraLauncher.launch(uri)
+            } catch (e: Exception) {
+                Toast.makeText(context, "فشل فتح الكاميرا: ${e.message}", Toast.LENGTH_SHORT).show()
+            }
+        } else {
+            cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+        }
+    }
+
+    // فحص الخدمة
     LaunchedEffect(Unit) {
         vm.checkServiceStatus()
     }
@@ -140,19 +209,7 @@ fun MainScreen(vm: MainViewModel) {
                                     Text("معرض")
                                 }
                                 Button(
-                                    onClick = {
-                                        val file = File(
-                                            context.cacheDir,
-                                            "camera_${System.currentTimeMillis()}.jpg"
-                                        )
-                                        val uri = FileProvider.getUriForFile(
-                                            context,
-                                            "${context.packageName}.fileprovider",
-                                            file
-                                        )
-                                        cameraUri = uri
-                                        cameraLauncher.launch(uri)
-                                    },
+                                    onClick = { openCamera() },
                                     colors = ButtonDefaults.buttonColors(
                                         containerColor = Color(0xFF252542)
                                     )
