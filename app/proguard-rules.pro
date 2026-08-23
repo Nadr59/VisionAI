@@ -1,4 +1,4 @@
--keepclassmembers class * {
-    native <methods>;
-}
--keep class com.nadrlab.visionai.ai.LocalLlmManager { *; }
+-keep class com.nadrlab.visionai.domain.** { *; }
+-keep class com.nadrlab.visionai.data.** { *; }
+-keep class * extends androidx.room.RoomDatabase
+-keep @androidx.room.Entity class *
