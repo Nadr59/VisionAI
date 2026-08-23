@@ -6,6 +6,7 @@ import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.nadrlab.visionai.ai.CloudVisionManager
+import com.nadrlab.visionai.ai.OcrEngine
 import com.nadrlab.visionai.ai.WebSearchEngine
 import com.nadrlab.visionai.data.AnalysisEntity
 import com.nadrlab.visionai.data.AppDatabase
@@ -24,30 +25,21 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         CloudVisionManager.init(settings)
     }
 
-    // ═══════════════════════════════════════════
-    // IMAGE
-    // ═══════════════════════════════════════════
-
+    // ═══ Image ═══
     private val _selectedImage = MutableStateFlow<Bitmap?>(null)
     val selectedImage: StateFlow<Bitmap?> = _selectedImage
 
     private val _selectedUri = MutableStateFlow<Uri?>(null)
     val selectedUri: StateFlow<Uri?> = _selectedUri
 
-    // ═══════════════════════════════════════════
-    // ANALYSIS
-    // ═══════════════════════════════════════════
-
+    // ═══ Analysis ═══
     private val _analysisType = MutableStateFlow(AnalysisType.GENERAL)
     val analysisType: StateFlow<AnalysisType> = _analysisType
 
     private val _state = MutableStateFlow(AnalysisState())
     val state: StateFlow<AnalysisState> = _state
 
-    // ═══════════════════════════════════════════
-    // CHAT
-    // ═══════════════════════════════════════════
-
+    // ═══ Chat ═══
     private val _chatHistory = MutableStateFlow<List<String>>(emptyList())
     val chatHistory: StateFlow<List<String>> = _chatHistory
 
@@ -57,10 +49,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val _lastAnalysisText = MutableStateFlow("")
     val lastAnalysisText: StateFlow<String> = _lastAnalysisText
 
-    // ═══════════════════════════════════════════
-    // HISTORY
-    // ═══════════════════════════════════════════
-
+    // ═══ History ═══
     private val _history = MutableStateFlow<List<AnalysisEntity>>(emptyList())
     val history: StateFlow<List<AnalysisEntity>> = _history
 
@@ -91,7 +80,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     // ═══════════════════════════════════════════
-    // ANALYSIS — سحابي فقط
+    // ANALYSIS
     // ═══════════════════════════════════════════
 
     fun analyze() {
@@ -104,21 +93,28 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             _lastAnalysisText.value = ""
 
             try {
-                // ═══ بناء prompt ═══
-                val prompt = buildCloudPrompt(type)
+                // OCR
+                var ocrText = ""
+                if (settings.ocrEnabled) {
+                    _state.value = _state.value.copy(progress = "استخراج النصوص...")
+                    ocrText = OcrEngine.recognize(bitmap)
+                }
 
-                // ═══ تحليل سحابي ═══
+                // Prompt
+                val prompt = buildCloudPrompt(type, ocrText)
+
+                // Cloud analyze
                 _state.value = _state.value.copy(progress = "جاري إرسال الصورة للمزود...")
                 val resultText = CloudVisionManager.analyze(bitmap, prompt).getOrElse {
                     throw Exception("فشل التحليل: ${it.message}")
                 }
 
-                // ═══ تحليل النتائج ═══
+                // Parse
                 _state.value = _state.value.copy(progress = "جاري معالجة النتائج...")
                 val parsed = parseResult(resultText)
-                _lastAnalysisText.value = buildContextForChat(parsed)
+                _lastAnalysisText.value = buildContextForChat(parsed, ocrText)
 
-                // ═══ بحث ويب ═══
+                // Search
                 var searchResults = emptyList<SearchResult>()
                 if (settings.searchEnabled && parsed.keywords.isNotEmpty()) {
                     _state.value = _state.value.copy(progress = "جاري البحث...")
@@ -132,7 +128,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     } catch (_: Exception) {}
                 }
 
-                // ═══ تحديث الحالة ═══
+                // Update
                 _state.value = AnalysisState(
                     isLoading = false,
                     result = parsed,
@@ -140,7 +136,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     usedMode = AiMode.CLOUD
                 )
 
-                // ═══ حفظ ═══
+                // Save
                 if (settings.saveHistory) {
                     saveToHistory(type, parsed, searchResults, _selectedUri.value?.toString() ?: "")
                 }
@@ -155,7 +151,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     // ═══════════════════════════════════════════
-    // CHAT — سحابي (مع صورة أو بدون)
+    // CHAT
     // ═══════════════════════════════════════════
 
     fun askQuestion(question: String) {
@@ -169,41 +165,28 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             _chatHistory.value = currentHistory
 
             try {
-                // ═══ بناء prompt مع سياق التحليل ═══
                 val chatPrompt = buildChatPrompt(question, _lastAnalysisText.value)
                 val bitmap = _selectedImage.value
 
-                // ═══ إرسال للمزود ═══
                 currentHistory.add("AI: 🤔 جاري التفكير...")
                 _chatHistory.value = currentHistory
 
                 val result = if (bitmap != null) {
-                    // مع صورة
                     CloudVisionManager.analyze(bitmap, chatPrompt)
                 } else {
-                    // بدون صورة — نرسل كنص فقط
-                    // نستخدم نفس API مع نص فقط
-                    CloudVisionManager.analyze(
-                        createBlankBitmap(),
-                        chatPrompt
-                    )
+                    CloudVisionManager.analyze(createBlankBitmap(), chatPrompt)
                 }
 
-                val response = result.getOrElse {
-                    "❌ خطأ: ${it.message}"
-                }
+                val response = result.getOrElse { "❌ خطأ: ${it.message}" }
 
-                // ═══ تحديث المحادثة ═══
                 val finalHistory = _chatHistory.value.toMutableList()
-                finalHistory.removeLast() // احذف "جاري التفكير"
+                finalHistory.removeLast()
                 finalHistory.add("AI: $response")
                 _chatHistory.value = finalHistory
 
             } catch (e: Exception) {
                 val errorHistory = _chatHistory.value.toMutableList()
-                errorHistory.removeAll {
-                    it.startsWith("AI:") && it.contains("جاري")
-                }
+                errorHistory.removeAll { it.startsWith("AI:") && it.contains("جاري") }
                 errorHistory.add("AI: ❌ خطأ: ${e.message}")
                 _chatHistory.value = errorHistory
             }
@@ -212,7 +195,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    // ═══ إنشاء bitmap فارغ للشات بدون صورة ═══
     private fun createBlankBitmap(): Bitmap {
         return Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888)
     }
@@ -225,8 +207,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     // PROMPTS
     // ═══════════════════════════════════════════
 
-    private fun buildCloudPrompt(type: AnalysisType): String {
-        return """${type.prompt}
+    private fun buildCloudPrompt(type: AnalysisType, ocrText: String = ""): String {
+        val base = """${type.prompt}
 
 Respond in ARABIC. Format your response EXACTLY as follows:
 
@@ -238,6 +220,12 @@ Respond in ARABIC. Format your response EXACTLY as follows:
 [الثقة]: (عالي/متوسط/منخفض/غير مؤكد)
 [معلومات]: (معلومات إضافية مهمة)
 [نهاية]"""
+
+        return if (ocrText.isNotBlank()) {
+            "$base\n\nالنص المستخرج بالـ OCR:\n$ocrText"
+        } else {
+            base
+        }
     }
 
     private fun buildChatPrompt(question: String, context: String): String {
@@ -259,12 +247,12 @@ $context
         }
     }
 
-    private fun buildContextForChat(result: AnalysisResult): String {
+    private fun buildContextForChat(result: AnalysisResult, ocr: String = ""): String {
         val sb = StringBuilder()
         sb.append("نوع المحتوى: ${result.contentType}\n")
         sb.append("الوصف: ${result.description}\n")
         sb.append("العناصر: ${result.elements.joinToString("،")}\n")
-        sb.append("النص المستخرج: ${result.extractedText.ifBlank { "لا يوجد" }}\n")
+        sb.append("النص المستخرج: ${result.extractedText.ifBlank { ocr.ifBlank { "لا يوجد" } }}\n")
         sb.append("الكلمات المفتاحية: ${result.keywords.joinToString("،")}\n")
         sb.append("الثقة: ${result.confidence.label}\n")
         sb.append("معلومات إضافية: ${result.additionalInfo}")
@@ -315,7 +303,7 @@ $context
     // HISTORY
     // ═══════════════════════════════════════════
 
-            private fun saveToHistory(
+    private fun saveToHistory(
         type: AnalysisType,
         result: AnalysisResult,
         search: List<SearchResult>,
@@ -326,7 +314,7 @@ $context
                 db.analysisDao().insert(
                     AnalysisEntity(
                         analysisType = type.name,
-                        contentType = result.contentType,   // ← تأكد هذا السطر موجود
+                        contentType = result.contentType,
                         description = result.description,
                         elements = result.elements.joinToString("،"),
                         extractedText = result.extractedText,
@@ -339,7 +327,8 @@ $context
                 )
             } catch (_: Exception) {}
         }
-            }
+    }
+
     fun loadHistory() {
         viewModelScope.launch {
             try {
@@ -356,10 +345,6 @@ $context
             } catch (_: Exception) {}
         }
     }
-
-    // ═══════════════════════════════════════════
-    // CLEANUP
-    // ═══════════════════════════════════════════
 
     override fun onCleared() {
         super.onCleared()
