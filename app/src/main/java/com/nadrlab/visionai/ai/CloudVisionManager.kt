@@ -48,6 +48,7 @@ object CloudVisionManager {
         return Base64.encodeToString(stream.toByteArray(), Base64.NO_WRAP)
     }
 
+    // ═══ تحليل صورة ═══
     suspend fun analyze(bitmap: Bitmap, prompt: String): Result<String> =
         withContext(Dispatchers.IO) {
             try {
@@ -55,17 +56,15 @@ object CloudVisionManager {
                 val s = settings
                     ?: return@withContext Result.failure(Exception("لم يتم تهيئة الإعدادات"))
 
-                // ═══ 1. المزود المخصص أولاً ═══
                 val providerUrl = s.providerUrl
                 val providerKey = s.providerKey
                 val providerModel = s.providerModel
 
                 if (providerUrl.isNotBlank() && providerKey.isNotBlank()) {
-                    val result = callCustomProvider(base64, prompt, providerUrl, providerKey, providerModel)
+                    val result = callCustomProviderWithImage(base64, prompt, providerUrl, providerKey, providerModel)
                     if (result.isSuccess) return@withContext result
                 }
 
-                // ═══ 2. ai-key-manager (مجاني) ═══
                 val result = callKeyManager(base64, prompt)
                 if (result.isSuccess) return@withContext result
 
@@ -75,7 +74,30 @@ object CloudVisionManager {
             }
         }
 
-    private fun callCustomProvider(
+    // ═══ محادثة نصية فقط (بدون صورة) ═══
+    suspend fun analyzeText(prompt: String): Result<String> =
+        withContext(Dispatchers.IO) {
+            try {
+                val s = settings
+                    ?: return@withContext Result.failure(Exception("لم يتم تهيئة الإعدادات"))
+
+                val providerUrl = s.providerUrl
+                val providerKey = s.providerKey
+                val providerModel = s.providerModel
+
+                if (providerUrl.isNotBlank() && providerKey.isNotBlank()) {
+                    val result = callCustomProviderTextOnly(prompt, providerUrl, providerKey, providerModel)
+                    if (result.isSuccess) return@withContext result
+                }
+
+                Result.failure(Exception("لا يوجد مزود مخصص مُعد. أضف مفتاح API في الإعدادات للمحادثة."))
+            } catch (e: Exception) {
+                Result.failure(e)
+            }
+        }
+
+    // ═══ مزود مخصص مع صورة ═══
+    private fun callCustomProviderWithImage(
         base64: String,
         prompt: String,
         url: String,
@@ -135,6 +157,56 @@ object CloudVisionManager {
         }
     }
 
+    // ═══ مزود مخصص نص فقط ═══
+    private fun callCustomProviderTextOnly(
+        prompt: String,
+        url: String,
+        apiKey: String,
+        model: String
+    ): Result<String> {
+        return try {
+            val messages = JSONArray().apply {
+                put(JSONObject().apply {
+                    put("role", "user")
+                    put("content", prompt)
+                })
+            }
+
+            val body = JSONObject().apply {
+                put("model", model.ifBlank { "gpt-4o" })
+                put("messages", messages)
+                put("max_tokens", 1500)
+            }
+
+            val request = Request.Builder()
+                .url(url)
+                .addHeader("Authorization", "Bearer $apiKey")
+                .addHeader("Content-Type", "application/json")
+                .post(body.toString().toRequestBody("application/json".toMediaType()))
+                .build()
+
+            val response = client.newCall(request).execute()
+            val responseBody = response.body?.string() ?: ""
+
+            if (!response.isSuccessful) {
+                return Result.failure(
+                    Exception("مزود مخصص ${response.code}: ${responseBody.take(200)}")
+                )
+            }
+
+            val json = JSONObject(responseBody)
+            val content = json.getJSONArray("choices")
+                .getJSONObject(0)
+                .getJSONObject("message")
+                .getString("content")
+
+            Result.success(content)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    // ═══ VisionAI Cloud (مجاني — صورة فقط) ═══
     private fun callKeyManager(base64: String, prompt: String): Result<String> {
         return try {
             val body = JSONObject().apply {
