@@ -2,6 +2,7 @@ package com.nadrlab.visionai.ui
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -18,11 +19,14 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.nadrlab.visionai.domain.CustomSearchEngine
+import com.nadrlab.visionai.domain.SearchEngine
 import com.nadrlab.visionai.vm.MainViewModel
 
 @Composable
 fun SettingsScreen(viewModel: MainViewModel) {
     val settings = viewModel.settings
+    val customEngines by viewModel.customEngines.collectAsState()
 
     var providerName by remember { mutableStateOf(settings.providerName) }
     var providerUrl by remember { mutableStateOf(settings.providerUrl) }
@@ -33,6 +37,11 @@ fun SettingsScreen(viewModel: MainViewModel) {
     var saveHistory by remember { mutableStateOf(settings.saveHistory) }
     var showKey by remember { mutableStateOf(false) }
     var showPresets by remember { mutableStateOf(false) }
+    var showAddEngine by remember { mutableStateOf(false) }
+
+    LaunchedEffect(Unit) {
+        viewModel.loadCustomEngines()
+    }
 
     Column(
         Modifier
@@ -46,19 +55,13 @@ fun SettingsScreen(viewModel: MainViewModel) {
 
         // ═══ المزود السحابي ═══
         SettingsCard("المزود السحابي") {
-            Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    if (settings.isCustomProviderConfigured()) "مزود مخصص نشط"
-                    else "يستخدم VisionAI Cloud المجاني",
-                    color = if (settings.isCustomProviderConfigured()) Color(0xFF4CAF50)
-                    else Color(0xFFFF9800),
-                    fontSize = 12.sp
-                )
-            }
+            Text(
+                if (settings.isCustomProviderConfigured()) "مزود مخصص نشط"
+                else "يستخدم VisionAI Cloud المجاني",
+                color = if (settings.isCustomProviderConfigured()) Color(0xFF4CAF50)
+                else Color(0xFFFF9800),
+                fontSize = 12.sp
+            )
 
             Spacer(Modifier.height(12.dp))
 
@@ -169,26 +172,312 @@ fun SettingsScreen(viewModel: MainViewModel) {
             SettingsSwitch("حفظ سجل التحليلات", saveHistory) { saveHistory = it; settings.saveHistory = it }
         }
 
+        // ═══ محرك البحث ═══
+        SettingsCard("محرك البحث المفضل") {
+            var selectedEngine by remember {
+                mutableStateOf(
+                    try { SearchEngine.valueOf(settings.searchEngine) }
+                    catch (_: Exception) { SearchEngine.SEARXNG }
+                )
+            }
+
+            // المحركات القياسية
+            SearchEngine.entries.forEach { engine ->
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable {
+                            selectedEngine = engine
+                            settings.searchEngine = engine.name
+                        }
+                        .padding(vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    RadioButton(
+                        selected = selectedEngine == engine,
+                        onClick = {
+                            selectedEngine = engine
+                            settings.searchEngine = engine.name
+                        },
+                        colors = RadioButtonDefaults.colors(selectedColor = Color(0xFF38BDF8))
+                    )
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("${engine.icon} ${engine.labelAr}", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                        Text(engine.description, color = Color(0xFF888888), fontSize = 11.sp)
+                    }
+                }
+                if (engine != SearchEngine.entries.last()) {
+                    HorizontalDivider(color = Color(0xFF252542))
+                }
+            }
+
+            // المحركات المخصصة
+            if (customEngines.isNotEmpty()) {
+                Spacer(Modifier.height(8.dp))
+                Text("محركات مخصصة", color = Color(0xFFE8C547), fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                Spacer(Modifier.height(4.dp))
+
+                customEngines.forEach { engine ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                settings.searchEngine = engine.id
+                            }
+                            .padding(vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        RadioButton(
+                            selected = settings.searchEngine == engine.id,
+                            onClick = { settings.searchEngine = engine.id },
+                            colors = RadioButtonDefaults.colors(selectedColor = Color(0xFF38BDF8))
+                        )
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("${engine.icon} ${engine.nameAr}", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                            Text(engine.name, color = Color(0xFF888888), fontSize = 11.sp)
+                        }
+                        IconButton(
+                            onClick = { viewModel.deleteCustomEngine(engine.id) },
+                            modifier = Modifier.size(32.dp)
+                        ) {
+                            Icon(Icons.Default.Delete, "حذف", tint = Color(0xFFFF6B6B), modifier = Modifier.size(18.dp))
+                        }
+                    }
+                    HorizontalDivider(color = Color(0xFF252542))
+                }
+            }
+
+            Spacer(Modifier.height(8.dp))
+
+            // زر إضافة محرك مخصص
+            OutlinedButton(
+                onClick = { showAddEngine = !showAddEngine },
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(10.dp),
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFF38BDF8))
+            ) {
+                Icon(Icons.Default.Add, null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(4.dp))
+                Text("إضافة محرك بحث مخصص")
+            }
+
+            // نموذج إضافة محرك
+            AnimatedVisibility(visible = showAddEngine) {
+                AddCustomEngineSection(
+                    onAdd = { engine ->
+                        viewModel.addCustomEngine(engine)
+                        showAddEngine = false
+                    },
+                    onCancel = { showAddEngine = false }
+                )
+            }
+        }
+
         // ═══ الخصوصية ═══
         SettingsCard("الخصوصية") {
             Text("بدون مزود مخصص: الصورة تُرسل لـ VisionAI Cloud المجاني", color = Color(0xFFFF9800), fontSize = 12.sp)
             Spacer(Modifier.height(4.dp))
             Text("مع مزود مخصص: الصورة تُرسل للمزود الذي اخترته", color = Color(0xFF38BDF8), fontSize = 12.sp)
-            Spacer(Modifier.height(4.dp))
-            Text("الشات يستخدم نفس المزود النشط", color = Color(0xFF888888), fontSize = 11.sp)
         }
 
         // ═══ حول ═══
         SettingsCard("حول التطبيق") {
             Text("Vision AI v2.0", color = Color(0xFF38BDF8), fontSize = 14.sp, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(4.dp))
-            Text("تحليل صور + محادثة بالذكاء الاصطناعي", color = Color(0xFF888888), fontSize = 12.sp)
+            Text("تحليل صور + محادثة + بحث بالذكاء الاصطناعي", color = Color(0xFF888888), fontSize = 12.sp)
         }
 
         Spacer(Modifier.height(80.dp))
     }
 }
 
+// ═══ نموذج إضافة محرك مخصص ═══
+@Composable
+fun AddCustomEngineSection(
+    onAdd: (CustomSearchEngine) -> Unit,
+    onCancel: () -> Unit
+) {
+    var name by remember { mutableStateOf("") }
+    var nameAr by remember { mutableStateOf("") }
+    var urlTemplate by remember { mutableStateOf("") }
+    var icon by remember { mutableStateOf("🔍") }
+    var showExamples by remember { mutableStateOf(false) }
+
+    Card(
+        modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(containerColor = Color(0xFF252542))
+    ) {
+        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text("إضافة محرك بحث", color = Color(0xFFE8C547), fontWeight = FontWeight.Bold, fontSize = 14.sp)
+
+            // شرح
+            Card(
+                colors = CardDefaults.cardColors(containerColor = Color(0xFF38BDF8).copy(0.1f)),
+                shape = RoundedCornerShape(8.dp)
+            ) {
+                Column(modifier = Modifier.padding(10.dp)) {
+                    Text("كيفية الإضافة:", color = Color(0xFF38BDF8), fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    Spacer(Modifier.height(4.dp))
+                    Text("1. افتح محرك البحث في المتصفح", color = Color(0xFFCCCCCC), fontSize = 11.sp)
+                    Text("2. ابحث عن أي شيء", color = Color(0xFFCCCCCC), fontSize = 11.sp)
+                    Text("3. انسخ رابط الصفحة من شريط العنوان", color = Color(0xFFCCCCCC), fontSize = 11.sp)
+                    Text("4. احذف كلمة البحث واستبدلها بـ {query}", color = Color(0xFFCCCCCC), fontSize = 11.sp)
+                    Spacer(Modifier.height(6.dp))
+                    Text("مثال:", color = Color(0xFFE8C547), fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    Text("https://yandex.com/search/?text=hello", color = Color(0xFF888888), fontSize = 10.sp)
+                    Text("↓", color = Color(0xFF38BDF8), fontSize = 10.sp)
+                    Text("https://yandex.com/search/?text={query}", color = Color(0xFF4CAF50), fontSize = 10.sp)
+                }
+            }
+
+            // نماذج جاهزة
+            OutlinedButton(
+                onClick = { showExamples = !showExamples },
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(8.dp),
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFFE8C547))
+            ) {
+                Icon(if (showExamples) Icons.Default.ExpandLess else Icons.Default.Lightbulb, null, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(4.dp))
+                Text("نماذج جاهزة للنسخ", fontSize = 12.sp)
+            }
+
+            AnimatedVisibility(visible = showExamples) {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    CustomSearchEngine.EXAMPLES.forEach { example ->
+                        OutlinedButton(
+                            onClick = {
+                                name = example.name
+                                nameAr = example.nameAr
+                                urlTemplate = example.urlTemplate
+                                icon = example.icon
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(8.dp),
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text("${example.icon} ${example.nameAr}", fontSize = 13.sp)
+                                Text(example.name, fontSize = 11.sp, color = Color(0xFF888888))
+                            }
+                        }
+                    }
+                }
+            }
+
+            // حقول الإدخال
+            OutlinedTextField(
+                value = nameAr,
+                onValueChange = { nameAr = it },
+                label = { Text("الاسم بالعربية", color = Color(0xFF888888), fontSize = 12.sp) },
+                placeholder = { Text("ياندكس", color = Color(0xFF555555), fontSize = 12.sp) },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+                textStyle = LocalTextStyle.current.copy(color = Color.White, fontSize = 13.sp),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = Color(0xFF38BDF8),
+                    unfocusedBorderColor = Color(0xFF333355),
+                    cursorColor = Color(0xFF38BDF8)
+                ),
+                shape = RoundedCornerShape(10.dp)
+            )
+
+            OutlinedTextField(
+                value = name,
+                onValueChange = { name = it },
+                label = { Text("الاسم بالإنجليزية", color = Color(0xFF888888), fontSize = 12.sp) },
+                placeholder = { Text("Yandex", color = Color(0xFF555555), fontSize = 12.sp) },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+                textStyle = LocalTextStyle.current.copy(color = Color.White, fontSize = 13.sp),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = Color(0xFF38BDF8),
+                    unfocusedBorderColor = Color(0xFF333355),
+                    cursorColor = Color(0xFF38BDF8)
+                ),
+                shape = RoundedCornerShape(10.dp)
+            )
+
+            OutlinedTextField(
+                value = urlTemplate,
+                onValueChange = { urlTemplate = it },
+                label = { Text("رابط البحث", color = Color(0xFF888888), fontSize = 12.sp) },
+                placeholder = { Text("https://yandex.com/search/?text={query}", color = Color(0xFF555555), fontSize = 12.sp) },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+                textStyle = LocalTextStyle.current.copy(color = Color.White, fontSize = 12.sp),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = Color(0xFF38BDF8),
+                    unfocusedBorderColor = Color(0xFF333355),
+                    cursorColor = Color(0xFF38BDF8)
+                ),
+                shape = RoundedCornerShape(10.dp)
+            )
+
+            // اختيار الأيقونة
+            Text("الأيقونة", color = Color(0xFF888888), fontSize = 12.sp)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                listOf("🔍", "🔴", "🔵", "🟢", "🟡", "🟣", "🦁", "🌳", "🌍", "🇨🇳", "👁️", "⚡").forEach { emoji ->
+                    Box(
+                        modifier = Modifier
+                            .size(36.dp)
+                            .background(
+                                if (icon == emoji) Color(0xFF38BDF8) else Color(0xFF1A1A2E),
+                                RoundedCornerShape(8.dp)
+                            )
+                            .clickable { icon = emoji },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(emoji, fontSize = 16.sp)
+                    }
+                }
+            }
+
+            // أزرار
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(
+                    onClick = onCancel,
+                    modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(10.dp),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFFFF6B6B))
+                ) {
+                    Text("إلغاء")
+                }
+                Button(
+                    onClick = {
+                        if (nameAr.isNotBlank() && urlTemplate.isNotBlank() && urlTemplate.contains("{query}")) {
+                            onAdd(
+                                CustomSearchEngine(
+                                    name = name.ifBlank { nameAr },
+                                    nameAr = nameAr,
+                                    urlTemplate = urlTemplate,
+                                    icon = icon
+                                )
+                            )
+                        }
+                    },
+                    modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(10.dp),
+                    enabled = nameAr.isNotBlank() && urlTemplate.isNotBlank() && urlTemplate.contains("{query}"),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF38BDF8))
+                ) {
+                    Icon(Icons.Default.Add, null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text("إضافة")
+                }
+            }
+        }
+    }
+}
+
+// ═══ مكونات مساعدة ═══
 @Composable
 fun SettingsCard(title: String, content: @Composable ColumnScope.() -> Unit) {
     Card(
