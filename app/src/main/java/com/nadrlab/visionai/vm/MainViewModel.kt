@@ -79,7 +79,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     // SERVICE STATUS
     // ═══════════════════════════════════════════
 
+        // ═══════════════════════════════════════════
+    // SERVICE STATUS — يفحص مرة واحدة فقط
+    // ═══════════════════════════════════════════
+
+    private var hasCheckedStatus = false
+
     fun checkServiceStatus() {
+        // إذا فحصنا سابقاً ولا نريد إعادة الفحص
+        if (hasCheckedStatus && _serviceStatus.value.online) return
+
         statusJob?.cancel()
         statusJob = viewModelScope.launch {
             _isCheckingStatus.value = true
@@ -88,13 +97,24 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     CloudVisionManager.checkStatus()
                 }
                 _serviceStatus.value = result
+                hasCheckedStatus = true
             } catch (e: TimeoutCancellationException) {
-                _serviceStatus.value = CloudVisionManager.ServiceStatus(error = "انتهت مهلة الفحص")
+                _serviceStatus.value = CloudVisionManager.ServiceStatus(
+                    error = "انتهت مهلة الفحص"
+                )
             } catch (e: Exception) {
-                _serviceStatus.value = CloudVisionManager.ServiceStatus(error = e.message ?: "خطأ غير معروف")
+                _serviceStatus.value = CloudVisionManager.ServiceStatus(
+                    error = e.message ?: "خطأ غير معروف"
+                )
             }
             _isCheckingStatus.value = false
         }
+    }
+
+    // فحص إجباري (زر التحديث)
+    fun forceCheckServiceStatus() {
+        hasCheckedStatus = false
+        checkServiceStatus()
     }
 
     // ═══════════════════════════════════════════
