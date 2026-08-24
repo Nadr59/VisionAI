@@ -239,10 +239,103 @@ fun SettingsScreen(viewModel: MainViewModel) {
                             Text(engine.name, color = Color(0xFF888888), fontSize = 11.sp)
                         }
                         IconButton(
-                            onClick = { viewModel.deleteCustomEngine(engine.id) },
+        // ═══ محرك البحث ═══
+        SettingsCard("محرك البحث المفضل") {
+            var selectedEngineId by remember {
+                mutableStateOf(settings.searchEngine)
+            }
+
+            // المحركات القياسية
+            SearchEngine.entries.forEach { engine ->
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable {
+                            selectedEngineId = engine.name
+                            settings.searchEngine = engine.name
+                        }
+                        .padding(vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    RadioButton(
+                        selected = selectedEngineId == engine.name,
+                        onClick = {
+                            selectedEngineId = engine.name
+                            settings.searchEngine = engine.name
+                        },
+                        colors = RadioButtonDefaults.colors(selectedColor = Color(0xFF38BDF8))
+                    )
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            "${engine.icon} ${engine.labelAr}",
+                            color = Color.White,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(engine.description, color = Color(0xFF888888), fontSize = 11.sp)
+                    }
+                }
+                if (engine != SearchEngine.entries.last()) {
+                    HorizontalDivider(color = Color(0xFF252542))
+                }
+            }
+
+            // المحركات المخصصة
+            if (customEngines.isNotEmpty()) {
+                Spacer(Modifier.height(12.dp))
+                Text(
+                    "محركات مخصصة",
+                    color = Color(0xFFE8C547),
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Bold
+                )
+                Spacer(Modifier.height(4.dp))
+
+                customEngines.forEach { engine ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                selectedEngineId = engine.id
+                                settings.searchEngine = engine.id
+                            }
+                            .padding(vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        RadioButton(
+                            selected = selectedEngineId == engine.id,
+                            onClick = {
+                                selectedEngineId = engine.id
+                                settings.searchEngine = engine.id
+                            },
+                            colors = RadioButtonDefaults.colors(selectedColor = Color(0xFF38BDF8))
+                        )
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                "${engine.icon} ${engine.nameAr}",
+                                color = Color.White,
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(engine.name, color = Color(0xFF888888), fontSize = 11.sp)
+                        }
+                        IconButton(
+                            onClick = {
+                                viewModel.deleteCustomEngine(engine.id)
+                                if (selectedEngineId == engine.id) {
+                                    selectedEngineId = "SEARXNG"
+                                    settings.searchEngine = "SEARXNG"
+                                }
+                            },
                             modifier = Modifier.size(32.dp)
                         ) {
-                            Icon(Icons.Default.Delete, "حذف", tint = Color(0xFFFF6B6B), modifier = Modifier.size(18.dp))
+                            Icon(
+                                Icons.Default.Delete, "حذف",
+                                tint = Color(0xFFFF6B6B),
+                                modifier = Modifier.size(18.dp)
+                            )
                         }
                     }
                     HorizontalDivider(color = Color(0xFF252542))
@@ -274,7 +367,6 @@ fun SettingsScreen(viewModel: MainViewModel) {
                 )
             }
         }
-
         // ═══ الخصوصية ═══
         SettingsCard("الخصوصية") {
             Text("بدون مزود مخصص: الصورة تُرسل لـ VisionAI Cloud المجاني", color = Color(0xFFFF9800), fontSize = 12.sp)
