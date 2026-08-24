@@ -267,6 +267,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             _isChatLoading.value = false
         }
     }
+        fun clearChat() {
+        chatJob?.cancel()
+        _chatHistory.value = emptyList()
+        _isChatLoading.value = false
+        }
 
     // ═══════════════════════════════════════════
     // PROMPTS
