@@ -1,4 +1,4 @@
-package com.nadrlab.visionai.ui
+ package com.nadrlab.visionai.ui
 
 import android.Manifest
 import android.content.Intent
@@ -133,6 +133,7 @@ fun MainScreen(vm: MainViewModel) {
         }
     }
 
+    // ═══ فحص مرة واحدة فقط عند أول دخول ═══
     LaunchedEffect(Unit) {
         vm.checkServiceStatus()
     }
@@ -150,13 +151,11 @@ fun MainScreen(vm: MainViewModel) {
                 ServiceStatusCard(
                     status = serviceStatus,
                     isChecking = isCheckingStatus,
-                    onRefresh = { vm.checkServiceStatus() }
+                    onRefresh = { vm.forceCheckServiceStatus() }
                 )
             }
 
-            // ═══ ═══ ═══ ═══ ═══ ═══ ═══ ═══
             // ═══ البحث في الإنترنت ═══
-            // ═══ ═══ ═══ ═══ ═══ ═══ ═══ ═══
             item {
                 Card(
                     modifier = Modifier.fillMaxWidth(),
@@ -178,6 +177,12 @@ fun MainScreen(vm: MainViewModel) {
                                 color = Color(0xFFE8C547),
                                 fontWeight = FontWeight.Bold,
                                 fontSize = 14.sp
+                            )
+                            Spacer(Modifier.weight(1f))
+                            Text(
+                                "لا يحتاج نموذج AI",
+                                color = Color(0xFF4CAF50),
+                                fontSize = 10.sp
                             )
                         }
 
@@ -251,7 +256,7 @@ fun MainScreen(vm: MainViewModel) {
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            "نتائج البحث: ${webSearch.query}",
+                            "نتائج: ${webSearch.query}",
                             fontWeight = FontWeight.Bold, fontSize = 14.sp,
                             color = Color(0xFFE8C547)
                         )
@@ -272,7 +277,6 @@ fun MainScreen(vm: MainViewModel) {
                 }
             }
 
-            // ═══ خطأ البحث ═══
             if (webSearch.error.isNotBlank()) {
                 item {
                     Card(
@@ -451,7 +455,6 @@ fun MainScreen(vm: MainViewModel) {
                 item { AnalysisResultCard(result) }
             }
 
-            // ═══ نتائج بحث التحليل ═══
             if (state.searchResults.isNotEmpty()) {
                 item {
                     Text(
@@ -547,7 +550,7 @@ fun MainScreen(vm: MainViewModel) {
     }
 }
 
-// ═══ Chip مساعد ═══
+// ═══ Chip ═══
 @Composable
 fun AnalysisChip(
     type: AnalysisType,
@@ -863,7 +866,7 @@ fun SearchResultCard(result: SearchResult) {
                     modifier = Modifier.size(28.dp)
                 ) {
                     Icon(
-                        Icons.Default.ContentCopy, "نسخ الرابط",
+                        Icons.Default.ContentCopy, "نسخ",
                         tint = Color(0xFF888888),
                         modifier = Modifier.size(14.dp)
                     )
