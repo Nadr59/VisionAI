@@ -205,9 +205,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     // CHAT — مُصحح بالكامل: لا ينهار أبداً
     // ═══════════════════════════════════════════
 
+    
+
+                // ═══════════════════════════════════════════
+    // CHAT — مُصحح: يرسل الصورة دائماً إن وُجدت
+    // ═══════════════════════════════════════════
+
     fun askQuestion(question: String) {
         if (question.isBlank()) return
-        if (_isChatLoading.value) return // منع الإرسال المتكرر
+        if (_isChatLoading.value) return
 
         chatJob?.cancel()
 
@@ -215,22 +221,25 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             _isChatLoading.value = true
 
             try {
-                // ═══ 1. إضافة رسالة المستخدم ═══
-                _chatHistory.value = _chatHistory.value + "USER: $question"
+                // 1. إضافة رسالة المستخدم
+                val withUserMsg = _chatHistory.value + "USER: $question"
+                _chatHistory.value = withUserMsg
 
-                // ═══ 2. إضافة مؤشر التفكير ═══
-                _chatHistory.value = _chatHistory.value + "AI: 🤔 جاري التفكير..."
+                // 2. إضافة مؤشر التفكير
+                _chatHistory.value = withUserMsg + "AI: 🤔 جاري التفكير..."
 
-                // ═══ 3. بناء الطلب ═══
+                // 3. بناء الطلب
                 val chatPrompt = buildChatPrompt(question, _lastAnalysisText.value)
                 val bitmap = _selectedImage.value
 
-                // ═══ 4. استدعاء الذكاء الاصطناعي — مع timeout ═══
-                val result = try {
-                    withTimeout(60_000) {
+                // 4. إرسال الطلب — دائماً مع صورة إن وُجدت
+                val result: Result<String> = try {
+                    withTimeout(90_000) {
                         if (bitmap != null) {
+                            // مع صورة — نفس طريقة التحليل
                             CloudVisionManager.analyze(bitmap, chatPrompt)
                         } else {
+                            // بدون صورة — نص فقط
                             CloudVisionManager.analyzeText(chatPrompt)
                         }
                     }
@@ -240,34 +249,23 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     Result.failure(Exception("خطأ: ${e.message ?: "غير معروف"}"))
                 }
 
-                // ═══ 5. تحديث المحادثة ═══
+                // 5. تحديث المحادثة
                 val response = result.getOrElse { "❌ ${it.message}" }
 
-                // إزالة مؤشر التفكير وإضافة الرد
-                _chatHistory.value = _chatHistory.value
-                    .filterNot { it.contains("جاري التفكير") }
-                    .plus("AI: $response")
+                _chatHistory.value = withUserMsg + "AI: $response"
 
             } catch (e: Exception) {
-                // ═══ معالجة أي خطأ غير متوقع ═══
                 try {
                     _chatHistory.value = _chatHistory.value
                         .filterNot { it.contains("جاري التفكير") }
                         .plus("AI: ❌ خطأ: ${e.message ?: "غير معروف"}")
                 } catch (_: Exception) {
-                    // إذا فشل كل شيء، أعد تعيين المحادثة
                     _chatHistory.value = listOf("AI: ❌ حدث خطأ غير متوقع")
                 }
             }
 
             _isChatLoading.value = false
         }
-    }
-
-    fun clearChat() {
-        chatJob?.cancel()
-        _chatHistory.value = emptyList()
-        _isChatLoading.value = false
     }
 
     // ═══════════════════════════════════════════
