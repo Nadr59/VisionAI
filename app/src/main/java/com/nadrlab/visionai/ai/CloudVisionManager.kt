@@ -110,6 +110,11 @@ object CloudVisionManager {
     //  محادثة نصية فقط — عبر /api/ask
     // ═══════════════════════════════════════════
 
+
+                    // ═══════════════════════════════════════════
+    //  محادثة نصية فقط — مع معالجة أخطاء كاملة
+    // ═══════════════════════════════════════════
+
     suspend fun analyzeText(prompt: String): Result<String> =
         withContext(Dispatchers.IO) {
             try {
@@ -131,10 +136,14 @@ object CloudVisionManager {
                 if (response.success && response.response.isNotBlank()) {
                     Result.success(response.response)
                 } else {
-                    Result.failure(Exception(response.error.ifBlank { "لا يوجد محتوى" }))
+                    val errorMsg = response.error.ifBlank {
+                        if (!response.success) "الخدمة غير متاحة — تأكد من تسجيل التطبيق"
+                        else "لا يوجد محتوى"
+                    }
+                    Result.failure(Exception(errorMsg))
                 }
             } catch (e: Exception) {
-                Result.failure(Exception("خطأ في المحادثة: ${e.message}"))
+                Result.failure(Exception("خطأ في المحادثة: ${e.message ?: "غير معروف"}"))
             }
         }
 
