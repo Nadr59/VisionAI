@@ -368,6 +368,39 @@ $context
             fullText = text
         )
     }
+        // ═══ Web Search ═══
+    private val _webSearch = MutableStateFlow(WebSearchState())
+    val webSearch: StateFlow<WebSearchState> = _webSearch
+
+    fun searchWeb(query: String) {
+        if (query.isBlank()) return
+
+        viewModelScope.launch {
+            _webSearch.value = WebSearchState(isLoading = true, query = query)
+
+            try {
+                val results = withTimeout(30_000) {
+                    WebSearchEngine.search(query)
+                }
+
+                _webSearch.value = WebSearchState(
+                    isLoading = false,
+                    query = query,
+                    results = results
+                )
+            } catch (e: Exception) {
+                _webSearch.value = WebSearchState(
+                    isLoading = false,
+                    query = query,
+                    error = "خطأ: ${e.message ?: "فشل البحث"}"
+                )
+            }
+        }
+    }
+
+    fun clearSearch() {
+        _webSearch.value = WebSearchState()
+    }
 
     // ═══════════════════════════════════════════
     // HISTORY
