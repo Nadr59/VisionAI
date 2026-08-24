@@ -66,6 +66,62 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private var statusJob: Job? = null
     private var chatJob: Job? = null
     private var analysisJob: Job? = null
+        // ═══ Custom Search Engines ═══
+    private val _customEngines = MutableStateFlow<List<CustomSearchEngine>>(emptyList())
+    val customEngines: StateFlow<List<CustomSearchEngine>> = _customEngines
+
+    fun loadCustomEngines() {
+        _customEngines.value = settings.getCustomEngines()
+    }
+
+    fun addCustomEngine(engine: CustomSearchEngine) {
+        settings.saveCustomEngine(engine)
+        _customEngines.value = settings.getCustomEngines()
+    }
+
+    fun deleteCustomEngine(id: String) {
+        settings.deleteCustomEngine(id)
+        _customEngines.value = settings.getCustomEngines()
+    }
+
+    fun searchWithCustomEngine(query: String, engine: CustomSearchEngine) {
+        if (query.isBlank()) return
+        if (_webSearch.value.isLoading) return
+
+        viewModelScope.launch {
+            _webSearch.value = WebSearchState(isLoading = true, query = query)
+
+            try {
+                val results = withTimeout(30_000) {
+                    WebSearchEngine.searchCustom(query, engine)
+                }
+
+                if (results.isNotEmpty()) {
+                    _webSearch.value = WebSearchState(
+                        isLoading = false,
+                        query = query,
+                        results = results
+                    )
+                } else {
+                    _webSearch.value = WebSearchState(
+                        isLoading = false,
+                        query = query,
+                        error = "لم يتم العثور على نتائج في ${engine.nameAr}"
+                    )
+                }
+            } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
+                _webSearch.value = WebSearchState(
+                    isLoading = false, query = query,
+                    error = "انتهت مهلة البحث"
+                )
+            } catch (e: Exception) {
+                _webSearch.value = WebSearchState(
+                    isLoading = false, query = query,
+                    error = "خطأ: ${e.message}"
+                )
+            }
+        }
+    }
 
     // ═══════════════════════════════════════════
     // SERVICE STATUS — سريع ومنع التكرار
@@ -374,7 +430,7 @@ $context
     private val _webSearch = MutableStateFlow(WebSearchState())
     val webSearch: StateFlow<WebSearchState> = _webSearch
 
-    fun searchWeb(query: String) {
+        fun searchWeb(query: String) {
         if (query.isBlank()) return
         if (_webSearch.value.isLoading) return
 
@@ -383,6 +439,23 @@ $context
 
             try {
                 val engineName = settings.searchEngine
+                val customEngines = settings.getCustomEngines()
+
+                // هل محرك مخصص؟
+                val customEngine = customEngines.find { it.id == engineName }
+                if (customEngine != null) {
+                    val results = withTimeout(30_000) {
+                        WebSearchEngine.searchCustom(query, customEngine)
+                    }
+                    _webSearch.value = if (results.isNotEmpty()) {
+                        WebSearchState(isLoading = false, query = query, results = results)
+                    } else {
+                        WebSearchState(isLoading = false, query = query, error = "لم يتم العثور على نتائج")
+                    }
+                    return@launch
+                }
+
+                // محرك قياسي
                 val engine = try {
                     SearchEngine.valueOf(engineName)
                 } catch (_: Exception) {
@@ -395,17 +468,15 @@ $context
 
                 if (results.isNotEmpty()) {
                     _webSearch.value = WebSearchState(
-                        isLoading = false,
-                        query = query,
-                        results = results
+                        isLoading = false, query = query, results = results
                     )
                 } else {
-                    // جرب البحث الشامل كاحتياطي
-                    val fallbackResults = withTimeout(30_000) {
+                    // احتياطي
+                    val fallback = withTimeout(30_000) {
                         WebSearchEngine.search(query, SearchEngine.MULTI)
                     }
-                    _webSearch.value = if (fallbackResults.isNotEmpty()) {
-                        WebSearchState(isLoading = false, query = query, results = fallbackResults)
+                    _webSearch.value = if (fallback.isNotEmpty()) {
+                        WebSearchState(isLoading = false, query = query, results = fallback)
                     } else {
                         WebSearchState(isLoading = false, query = query, error = "لم يتم العثور على نتائج")
                     }
@@ -413,16 +484,16 @@ $context
             } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
                 _webSearch.value = WebSearchState(
                     isLoading = false, query = query,
-                    error = "انتهت مهلة البحث — حاول مرة أخرى"
+                    error = "انتهت مهلة البحث"
                 )
             } catch (e: Exception) {
                 _webSearch.value = WebSearchState(
                     isLoading = false, query = query,
-                    error = "خطأ: ${e.message ?: "غير معروف"}"
+                    error = "خطأ: ${e.message}"
                 )
             }
         }
-    }
+        }
 
     fun clearSearch() {
         _webSearch.value = WebSearchState()
