@@ -1,5 +1,6 @@
 package com.nadrlab.visionai.ui
 
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -15,6 +16,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -26,6 +29,8 @@ fun ChatScreen(vm: MainViewModel) {
     val chatHistory by vm.chatHistory.collectAsState()
     val isLoading by vm.isChatLoading.collectAsState()
     val selectedImage by vm.selectedImage.collectAsState()
+    val serviceStatus by vm.serviceStatus.collectAsState()
+    val isCheckingStatus by vm.isCheckingStatus.collectAsState()
 
     var inputText by remember { mutableStateOf("") }
     val listState = rememberLazyListState()
@@ -43,25 +48,85 @@ fun ChatScreen(vm: MainViewModel) {
             .background(Color(0xFF0D0D0D))
             .imePadding()
     ) {
-        // ═══ Header ═══
+        // ═══ حالة الخدمة ═══
+        Card(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+            colors = CardDefaults.cardColors(
+                containerColor = if (serviceStatus.online) Color(0xFF1A2E1A)
+                else if (serviceStatus.error.isNotBlank()) Color(0xFF2E1A1A)
+                else Color(0xFF1A1A2E)
+            ),
+            shape = RoundedCornerShape(8.dp)
+        ) {
+            Row(
+                modifier = Modifier.padding(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(8.dp)
+                        .background(
+                            if (serviceStatus.online) Color(0xFF4CAF50)
+                            else if (serviceStatus.error.isNotBlank()) Color(0xFFFF6B6B)
+                            else Color(0xFFFF9800),
+                            CircleShape
+                        )
+                )
+                Text(
+                    if (serviceStatus.online) "متصل"
+                    else if (serviceStatus.error.isNotBlank()) serviceStatus.error
+                    else "جاري الفحص...",
+                    fontSize = 11.sp,
+                    color = if (serviceStatus.online) Color(0xFF4CAF50)
+                    else if (serviceStatus.error.isNotBlank()) Color(0xFFFF6B6B)
+                    else Color(0xFFFF9800)
+                )
+
+                if (serviceStatus.provider.isNotBlank()) {
+                    Text("• ${serviceStatus.provider}", fontSize = 11.sp, color = Color(0xFF888888))
+                }
+
+                Spacer(Modifier.weight(1f))
+
+                IconButton(
+                    onClick = { vm.checkServiceStatus() },
+                    enabled = !isCheckingStatus,
+                    modifier = Modifier.size(24.dp)
+                ) {
+                    if (isCheckingStatus) {
+                        CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 1.5.dp, color = Color(0xFF38BDF8))
+                    } else {
+                        Icon(Icons.Default.Refresh, null, modifier = Modifier.size(14.dp), tint = Color(0xFF38BDF8))
+                    }
+                }
+            }
+        }
+
+        // ═══ الصورة المحددة ═══
         if (selectedImage != null) {
             Card(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 2.dp),
                 colors = CardDefaults.cardColors(containerColor = Color(0xFF38BDF8).copy(0.1f)),
                 shape = RoundedCornerShape(8.dp)
             ) {
                 Row(
                     modifier = Modifier.padding(8.dp),
-                    verticalAlignment = Alignment.CenterVertically
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Icon(Icons.Default.Image, null, tint = Color(0xFF38BDF8), modifier = Modifier.size(16.dp))
-                    Spacer(Modifier.width(6.dp))
+                    Image(
+                        bitmap = selectedImage!!.asImageBitmap(),
+                        contentDescription = null,
+                        modifier = Modifier.size(40.dp).clip(RoundedCornerShape(6.dp)),
+                        contentScale = ContentScale.Crop
+                    )
                     Text("الشات مرتبط بالصورة المحددة", fontSize = 12.sp, color = Color(0xFF38BDF8))
                 }
             }
         }
 
-        // ═══ Messages ═══
+        // ═══ الرسائل ═══
         LazyColumn(
             modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 12.dp),
             state = listState,
@@ -71,7 +136,7 @@ fun ChatScreen(vm: MainViewModel) {
             if (chatHistory.isEmpty()) {
                 item {
                     Box(
-                        modifier = Modifier.fillMaxWidth().padding(top = 100.dp),
+                        modifier = Modifier.fillMaxWidth().padding(top = 80.dp),
                         contentAlignment = Alignment.Center
                     ) {
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -82,7 +147,11 @@ fun ChatScreen(vm: MainViewModel) {
                             Spacer(Modifier.height(12.dp))
                             Text("ابدأ محادثة مع Vision AI", color = Color(0xFF888888), fontSize = 16.sp)
                             Spacer(Modifier.height(4.dp))
-                            Text("اسأل عن أي شيء أو تحليل صورة", color = Color(0xFF666666), fontSize = 13.sp)
+                            if (selectedImage != null) {
+                                Text("اسأل عن الصورة المحددة", color = Color(0xFF666666), fontSize = 13.sp)
+                            } else {
+                                Text("اكتب أي سؤال", color = Color(0xFF666666), fontSize = 13.sp)
+                            }
                         }
                     }
                 }
@@ -98,7 +167,10 @@ fun ChatScreen(vm: MainViewModel) {
                 ) {
                     if (!isUser) {
                         Box(
-                            modifier = Modifier.size(32.dp).clip(CircleShape).background(Color(0xFF38BDF8)),
+                            modifier = Modifier
+                                .size(32.dp)
+                                .clip(CircleShape)
+                                .background(Color(0xFF38BDF8)),
                             contentAlignment = Alignment.Center
                         ) {
                             Text("AI", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = Color.White)
@@ -129,7 +201,10 @@ fun ChatScreen(vm: MainViewModel) {
                     if (isUser) {
                         Spacer(Modifier.width(6.dp))
                         Box(
-                            modifier = Modifier.size(32.dp).clip(CircleShape).background(Color(0xFF03DAC6)),
+                            modifier = Modifier
+                                .size(32.dp)
+                                .clip(CircleShape)
+                                .background(Color(0xFF03DAC6)),
                             contentAlignment = Alignment.Center
                         ) {
                             Icon(Icons.Default.Person, null, tint = Color.White, modifier = Modifier.size(18.dp))
@@ -142,17 +217,17 @@ fun ChatScreen(vm: MainViewModel) {
                 item {
                     Row(
                         modifier = Modifier.fillMaxWidth().padding(start = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = Color(0xFF38BDF8))
-                        Spacer(Modifier.width(8.dp))
                         Text("جاري الكتابة...", fontSize = 12.sp, color = Color(0xFF888888))
                     }
                 }
             }
         }
 
-        // ═══ Input — يرتفع مع لوحة المفاتيح ═══
+        // ═══ مربع الكتابة ═══
         Card(
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp),
@@ -167,8 +242,15 @@ fun ChatScreen(vm: MainViewModel) {
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 if (chatHistory.isNotEmpty()) {
-                    IconButton(onClick = { vm.clearChat() }, modifier = Modifier.size(36.dp)) {
-                        Icon(Icons.Default.DeleteSweep, "مسح", modifier = Modifier.size(20.dp), tint = Color(0xFF888888))
+                    IconButton(
+                        onClick = { vm.clearChat() },
+                        modifier = Modifier.size(36.dp)
+                    ) {
+                        Icon(
+                            Icons.Default.DeleteSweep, "مسح",
+                            modifier = Modifier.size(20.dp),
+                            tint = Color(0xFF888888)
+                        )
                     }
                 }
 
@@ -176,11 +258,20 @@ fun ChatScreen(vm: MainViewModel) {
                     value = inputText,
                     onValueChange = { inputText = it },
                     modifier = Modifier.weight(1f),
-                    placeholder = { Text("اكتب رسالتك...", color = Color(0xFF555555)) },
+                    placeholder = {
+                        Text(
+                            if (selectedImage != null) "اسأل عن الصورة..."
+                            else "اكتب سؤالك...",
+                            color = Color(0xFF555555)
+                        )
+                    },
                     singleLine = true,
                     shape = RoundedCornerShape(24.dp),
                     maxLines = 3,
-                    textStyle = LocalTextStyle.current.copy(color = Color.White, fontSize = 14.sp),
+                    textStyle = LocalTextStyle.current.copy(
+                        color = Color.White,
+                        fontSize = 14.sp
+                    ),
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedBorderColor = Color(0xFF38BDF8),
                         unfocusedBorderColor = Color(0xFF333355),
@@ -209,7 +300,8 @@ fun ChatScreen(vm: MainViewModel) {
                 ) {
                     Icon(
                         Icons.Default.Send, "إرسال",
-                        tint = if (inputText.isNotBlank() && !isLoading) Color.White else Color(0xFF555555)
+                        tint = if (inputText.isNotBlank() && !isLoading) Color.White
+                        else Color(0xFF555555)
                     )
                 }
             }
