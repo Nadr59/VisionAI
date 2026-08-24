@@ -363,6 +363,149 @@ object WebSearchEngine {
             if (key in seen) false else { seen.add(key); true }
         }.take(20)
     }
+        // ═══════════════════════════════════════════
+    //  بحث محرك مخصص — يعمل مع أي محرك
+    // ═══════════════════════════════════════════
+
+    suspend fun searchCustom(
+        query: String,
+        engine: CustomSearchEngine
+    ): List<SearchResult> {
+        return withContext(Dispatchers.IO) {
+            try {
+                val encoded = URLEncoder.encode(query, "UTF-8")
+                val searchUrl = engine.urlTemplate.replace("{query}", encoded)
+
+                val request = Request.Builder()
+                    .url(searchUrl)
+                    .addHeader("User-Agent", "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/120.0 Mobile Safari/537.36")
+                    .addHeader("Accept-Language", "ar,en;q=0.9")
+                    .addHeader("Accept", "text/html")
+                    .build()
+
+                val response = client.newCall(request).execute()
+                val html = response.body?.string() ?: ""
+
+                if (html.isBlank()) return@withContext emptyList()
+
+                // تحليل HTML — يبحث عن أي رابط في الصفحة
+                parseGenericHtml(html, engine.name)
+            } catch (e: Exception) {
+                emptyList()
+            }
+        }
+    }
+
+    // ═══ تحليل HTML عام — يعمل مع أي محرك ═══
+    private fun parseGenericHtml(html: String, engineName: String): List<SearchResult> {
+        val results = mutableListOf<SearchResult>()
+        val seen = mutableSetOf<String>()
+
+        // البحث عن كل الروابط في الصفحة
+        val linkPattern = Regex("""<a[^>]*href="(https?://[^"]+)"[^>]*>(.*?)</a>""", RegexOption.DOT_MATCHES_ALL)
+        val matches = linkPattern.findAll(html)
+
+        for (match in matches) {
+            val url = match.groupValues[1]
+            val rawTitle = match.groupValues[2]
+                .replace(Regex("<[^>]+>"), "")
+                .replace("&amp;", "&")
+                .replace("&quot;", "\"")
+                .replace("&#x27;", "'")
+                .replace("&#39;", "'")
+                .replace("&lt;", "<")
+                .replace("&gt;", ">")
+                .replace("&#x2F;", "/")
+                .replace("&nbsp;", " ")
+                .trim()
+
+            // تصفية الروابط غير المرغوبة
+            val skipDomains = listOf(
+                "google.com", "bing.com", "yandex.com",
+                "facebook.com", "twitter.com", "instagram.com",
+                "youtube.com/subscribe", "play.google.com",
+                "apple.com/itunes", "accounts.google",
+                "support.google", "policies.google",
+                "fonts.googleapis", "ajax.googleapis",
+                ".css", ".js", ".png", ".jpg", ".gif", ".svg",
+                "javascript:", "mailto:", "tel:"
+            )
+
+            val shouldSkip = skipDomains.any { url.contains(it, ignoreCase = true) } ||
+                    rawTitle.length < 5 ||
+                    url in seen
+
+            if (!shouldSkip && rawTitle.isNotBlank()) {
+                seen.add(url)
+
+                // البحث عن مقتطف قريب من الرابط
+                val snippet = extractNearbyText(html, url)
+
+                results.add(
+                    SearchResult(
+                        title = rawTitle.take(150),
+                        url = url,
+                        snippet = snippet.take(400),
+                        source = "$engineName · ${extractDomain(url)}"
+                    )
+                )
+
+                if (results.size >= 15) break
+            }
+        }
+
+        return results
+    }
+
+    // ═══ استخراج نص قريب من الرابط ═══
+    private fun extractNearbyText(html: String, url: String): String {
+        return try {
+            val idx = html.indexOf(url)
+            if (idx < 0) return ""
+
+            // البحث عن نص بعد الرابط
+            val after = html.substring(minOf(idx + url.length, html.length), minOf(idx + url.length + 500, html.length))
+            val textAfter = after.replace(Regex("<[^>]+>"), " ").replace("\\s+".toRegex(), " ").trim()
+
+            if (textAfter.length > 20) {
+                textAfter.take(300)
+            } else {
+                // البحث عن نص قبل الرابط
+                val before = html.substring(maxOf(0, idx - 500), idx)
+                val textBefore = before.replace(Regex("<[^>]+>"), " ").replace("\\s+".toRegex(), " ").trim()
+                textBefore.takeLast(300)
+            }
+        } catch (_: Exception) {
+            ""
+        }
+    }
+
+    // ═══ بحث شامل مع محركات مخصصة ═══
+    suspend fun searchWithCustom(
+        query: String,
+        engine: SearchEngine,
+        customEngines: List<CustomSearchEngine> = emptyList()
+    ): List<SearchResult> {
+        return when (engine) {
+            SearchEngine.MULTI -> {
+                // البحث الشامل يشمل المحركات المخصصة أيضاً
+                val standardResults = searchMulti(query)
+                val customResults = customEngines.map { ce ->
+                    kotlinx.coroutines.async(Dispatchers.IO) {
+                        try { searchCustom(query, ce) } catch (_: Exception) { emptyList() }
+                    }
+                }.awaitAll().flatten()
+
+                val all = standardResults + customResults
+                val seen = mutableSetOf<String>()
+                all.filter { r ->
+                    val key = r.url.removeSuffix("/")
+                    if (key in seen) false else { seen.add(key); true }
+                }.take(25)
+            }
+            else -> search(query, engine)
+        }
+    }
 
     // ═══════════════════════════════════════════
     //  أدوات مساعدة
