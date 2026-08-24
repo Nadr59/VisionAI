@@ -113,7 +113,10 @@ fun SettingsScreen(viewModel: MainViewModel) {
                     shape = RoundedCornerShape(10.dp),
                     colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFF38BDF8))
                 ) {
-                    Icon(if (showPresets) Icons.Default.ExpandLess else Icons.Default.Tune, null, modifier = Modifier.size(18.dp))
+                    Icon(
+                        if (showPresets) Icons.Default.ExpandLess else Icons.Default.Tune,
+                        null, modifier = Modifier.size(18.dp)
+                    )
                     Spacer(Modifier.width(4.dp))
                     Text("نماذج جاهزة", fontSize = 12.sp)
                 }
@@ -122,7 +125,10 @@ fun SettingsScreen(viewModel: MainViewModel) {
                     Button(
                         onClick = {
                             settings.clearProvider()
-                            providerName = ""; providerUrl = ""; providerKey = ""; providerModel = "glm-5.3"
+                            providerName = ""
+                            providerUrl = ""
+                            providerKey = ""
+                            providerModel = "glm-5.3"
                         },
                         modifier = Modifier.weight(1f),
                         shape = RoundedCornerShape(10.dp),
@@ -136,7 +142,10 @@ fun SettingsScreen(viewModel: MainViewModel) {
             }
 
             AnimatedVisibility(visible = showPresets) {
-                Column(modifier = Modifier.padding(top = 8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Column(
+                    modifier = Modifier.padding(top = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
                     PresetButton("ZenMux", "glm-5.3") {
                         providerName = "ZenMux"
                         providerUrl = "https://zenmux.ai/api/v1/chat/completions"
@@ -167,85 +176,21 @@ fun SettingsScreen(viewModel: MainViewModel) {
 
         // ═══ الميزات ═══
         SettingsCard("الميزات") {
-            SettingsSwitch("استخراج النصوص (OCR)", ocrEnabled) { ocrEnabled = it; settings.ocrEnabled = it }
-            SettingsSwitch("البحث في الإنترنت", searchEnabled) { searchEnabled = it; settings.searchEnabled = it }
-            SettingsSwitch("حفظ سجل التحليلات", saveHistory) { saveHistory = it; settings.saveHistory = it }
+            SettingsSwitch("استخراج النصوص (OCR)", ocrEnabled) {
+                ocrEnabled = it; settings.ocrEnabled = it
+            }
+            SettingsSwitch("البحث في الإنترنت", searchEnabled) {
+                searchEnabled = it; settings.searchEnabled = it
+            }
+            SettingsSwitch("حفظ سجل التحليلات", saveHistory) {
+                saveHistory = it; settings.saveHistory = it
+            }
         }
 
         // ═══ محرك البحث ═══
         SettingsCard("محرك البحث المفضل") {
-            var selectedEngine by remember {
-                mutableStateOf(
-                    try { SearchEngine.valueOf(settings.searchEngine) }
-                    catch (_: Exception) { SearchEngine.SEARXNG }
-                )
-            }
+            var selectedEngineId by remember { mutableStateOf(settings.searchEngine) }
 
-            // المحركات القياسية
-            SearchEngine.entries.forEach { engine ->
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable {
-                            selectedEngine = engine
-                            settings.searchEngine = engine.name
-                        }
-                        .padding(vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    RadioButton(
-                        selected = selectedEngine == engine,
-                        onClick = {
-                            selectedEngine = engine
-                            settings.searchEngine = engine.name
-                        },
-                        colors = RadioButtonDefaults.colors(selectedColor = Color(0xFF38BDF8))
-                    )
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text("${engine.icon} ${engine.labelAr}", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold)
-                        Text(engine.description, color = Color(0xFF888888), fontSize = 11.sp)
-                    }
-                }
-                if (engine != SearchEngine.entries.last()) {
-                    HorizontalDivider(color = Color(0xFF252542))
-                }
-            }
-
-            // المحركات المخصصة
-            if (customEngines.isNotEmpty()) {
-                Spacer(Modifier.height(8.dp))
-                Text("محركات مخصصة", color = Color(0xFFE8C547), fontSize = 13.sp, fontWeight = FontWeight.Bold)
-                Spacer(Modifier.height(4.dp))
-
-                customEngines.forEach { engine ->
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable {
-                                settings.searchEngine = engine.id
-                            }
-                            .padding(vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(12.dp)
-                    ) {
-                        RadioButton(
-                            selected = settings.searchEngine == engine.id,
-                            onClick = { settings.searchEngine = engine.id },
-                            colors = RadioButtonDefaults.colors(selectedColor = Color(0xFF38BDF8))
-                        )
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("${engine.icon} ${engine.nameAr}", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold)
-                            Text(engine.name, color = Color(0xFF888888), fontSize = 11.sp)
-                        }
-                        IconButton(
-        // ═══ محرك البحث ═══
-        SettingsCard("محرك البحث المفضل") {
-            var selectedEngineId by remember {
-                mutableStateOf(settings.searchEngine)
-            }
-
-            // المحركات القياسية
             SearchEngine.entries.forEach { engine ->
                 Row(
                     modifier = Modifier
@@ -281,7 +226,6 @@ fun SettingsScreen(viewModel: MainViewModel) {
                 }
             }
 
-            // المحركات المخصصة
             if (customEngines.isNotEmpty()) {
                 Spacer(Modifier.height(12.dp))
                 Text(
@@ -344,7 +288,6 @@ fun SettingsScreen(viewModel: MainViewModel) {
 
             Spacer(Modifier.height(8.dp))
 
-            // زر إضافة محرك مخصص
             OutlinedButton(
                 onClick = { showAddEngine = !showAddEngine },
                 modifier = Modifier.fillMaxWidth(),
@@ -356,7 +299,6 @@ fun SettingsScreen(viewModel: MainViewModel) {
                 Text("إضافة محرك بحث مخصص")
             }
 
-            // نموذج إضافة محرك
             AnimatedVisibility(visible = showAddEngine) {
                 AddCustomEngineSection(
                     onAdd = { engine ->
@@ -367,11 +309,18 @@ fun SettingsScreen(viewModel: MainViewModel) {
                 )
             }
         }
+
         // ═══ الخصوصية ═══
         SettingsCard("الخصوصية") {
-            Text("بدون مزود مخصص: الصورة تُرسل لـ VisionAI Cloud المجاني", color = Color(0xFFFF9800), fontSize = 12.sp)
+            Text(
+                "بدون مزود مخصص: الصورة تُرسل لـ VisionAI Cloud المجاني",
+                color = Color(0xFFFF9800), fontSize = 12.sp
+            )
             Spacer(Modifier.height(4.dp))
-            Text("مع مزود مخصص: الصورة تُرسل للمزود الذي اخترته", color = Color(0xFF38BDF8), fontSize = 12.sp)
+            Text(
+                "مع مزود مخصص: الصورة تُرسل للمزود الذي اخترته",
+                color = Color(0xFF38BDF8), fontSize = 12.sp
+            )
         }
 
         // ═══ حول ═══
@@ -398,20 +347,34 @@ fun AddCustomEngineSection(
     var showExamples by remember { mutableStateOf(false) }
 
     Card(
-        modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 8.dp),
         shape = RoundedCornerShape(12.dp),
         colors = CardDefaults.cardColors(containerColor = Color(0xFF252542))
     ) {
-        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Text("إضافة محرك بحث", color = Color(0xFFE8C547), fontWeight = FontWeight.Bold, fontSize = 14.sp)
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Text(
+                "إضافة محرك بحث",
+                color = Color(0xFFE8C547),
+                fontWeight = FontWeight.Bold,
+                fontSize = 14.sp
+            )
 
-            // شرح
             Card(
                 colors = CardDefaults.cardColors(containerColor = Color(0xFF38BDF8).copy(0.1f)),
                 shape = RoundedCornerShape(8.dp)
             ) {
                 Column(modifier = Modifier.padding(10.dp)) {
-                    Text("كيفية الإضافة:", color = Color(0xFF38BDF8), fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    Text(
+                        "كيفية الإضافة:",
+                        color = Color(0xFF38BDF8),
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold
+                    )
                     Spacer(Modifier.height(4.dp))
                     Text("1. افتح محرك البحث في المتصفح", color = Color(0xFFCCCCCC), fontSize = 11.sp)
                     Text("2. ابحث عن أي شيء", color = Color(0xFFCCCCCC), fontSize = 11.sp)
@@ -419,20 +382,28 @@ fun AddCustomEngineSection(
                     Text("4. احذف كلمة البحث واستبدلها بـ {query}", color = Color(0xFFCCCCCC), fontSize = 11.sp)
                     Spacer(Modifier.height(6.dp))
                     Text("مثال:", color = Color(0xFFE8C547), fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                    Text("https://yandex.com/search/?text=hello", color = Color(0xFF888888), fontSize = 10.sp)
+                    Text(
+                        "https://yandex.com/search/?text=hello",
+                        color = Color(0xFF888888), fontSize = 10.sp
+                    )
                     Text("↓", color = Color(0xFF38BDF8), fontSize = 10.sp)
-                    Text("https://yandex.com/search/?text={query}", color = Color(0xFF4CAF50), fontSize = 10.sp)
+                    Text(
+                        "https://yandex.com/search/?text={query}",
+                        color = Color(0xFF4CAF50), fontSize = 10.sp
+                    )
                 }
             }
 
-            // نماذج جاهزة
             OutlinedButton(
                 onClick = { showExamples = !showExamples },
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(8.dp),
                 colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFFE8C547))
             ) {
-                Icon(if (showExamples) Icons.Default.ExpandLess else Icons.Default.Lightbulb, null, modifier = Modifier.size(16.dp))
+                Icon(
+                    if (showExamples) Icons.Default.ExpandLess else Icons.Default.Lightbulb,
+                    null, modifier = Modifier.size(16.dp)
+                )
                 Spacer(Modifier.width(4.dp))
                 Text("نماذج جاهزة للنسخ", fontSize = 12.sp)
             }
@@ -464,7 +435,6 @@ fun AddCustomEngineSection(
                 }
             }
 
-            // حقول الإدخال
             OutlinedTextField(
                 value = nameAr,
                 onValueChange = { nameAr = it },
@@ -501,7 +471,12 @@ fun AddCustomEngineSection(
                 value = urlTemplate,
                 onValueChange = { urlTemplate = it },
                 label = { Text("رابط البحث", color = Color(0xFF888888), fontSize = 12.sp) },
-                placeholder = { Text("https://yandex.com/search/?text={query}", color = Color(0xFF555555), fontSize = 12.sp) },
+                placeholder = {
+                    Text(
+                        "https://yandex.com/search/?text={query}",
+                        color = Color(0xFF555555), fontSize = 12.sp
+                    )
+                },
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
                 textStyle = LocalTextStyle.current.copy(color = Color.White, fontSize = 12.sp),
@@ -513,7 +488,6 @@ fun AddCustomEngineSection(
                 shape = RoundedCornerShape(10.dp)
             )
 
-            // اختيار الأيقونة
             Text("الأيقونة", color = Color(0xFF888888), fontSize = 12.sp)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 listOf("🔍", "🔴", "🔵", "🟢", "🟡", "🟣", "🦁", "🌳", "🌍", "🇨🇳", "👁️", "⚡").forEach { emoji ->
@@ -532,7 +506,6 @@ fun AddCustomEngineSection(
                 }
             }
 
-            // أزرار
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(
                     onClick = onCancel,
@@ -586,10 +559,15 @@ fun SettingsCard(title: String, content: @Composable ColumnScope.() -> Unit) {
 
 @Composable
 fun SettingsSwitch(label: String, checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
-    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+    Row(
+        Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
         Text(label, color = Color.White, fontSize = 13.sp)
         Switch(
-            checked = checked, onCheckedChange = onCheckedChange,
+            checked = checked,
+            onCheckedChange = onCheckedChange,
             colors = SwitchDefaults.colors(checkedTrackColor = Color(0xFF38BDF8))
         )
     }
