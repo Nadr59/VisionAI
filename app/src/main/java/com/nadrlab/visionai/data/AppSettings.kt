@@ -53,7 +53,50 @@ class AppSettings(context: Context) {
             .putString("provider_model", model)
             .apply()
     }
-    
+        // ═══ محركات بحث مخصصة ═══
+    fun getCustomEngines(): List<CustomSearchEngine> {
+        val json = prefs.getString("custom_engines", "[]") ?: "[]"
+        return try {
+            val arr = org.json.JSONArray(json)
+            (0 until arr.length()).map { i ->
+                val obj = arr.getJSONObject(i)
+                CustomSearchEngine(
+                    id = obj.optString("id", ""),
+                    name = obj.optString("name", ""),
+                    nameAr = obj.optString("nameAr", ""),
+                    urlTemplate = obj.optString("urlTemplate", ""),
+                    icon = obj.optString("icon", "🔍")
+                )
+            }
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+
+    fun saveCustomEngine(engine: CustomSearchEngine) {
+        val list = getCustomEngines().toMutableList()
+        list.add(engine)
+        saveCustomEnginesList(list)
+    }
+
+    fun deleteCustomEngine(id: String) {
+        val list = getCustomEngines().filter { it.id != id }
+        saveCustomEnginesList(list)
+    }
+
+    private fun saveCustomEnginesList(list: List<CustomSearchEngine>) {
+        val arr = org.json.JSONArray()
+        list.forEach { engine ->
+            arr.put(org.json.JSONObject().apply {
+                put("id", engine.id)
+                put("name", engine.name)
+                put("nameAr", engine.nameAr)
+                put("urlTemplate", engine.urlTemplate)
+                put("icon", engine.icon)
+            })
+        }
+        prefs.edit().putString("custom_engines", arr.toString()).apply()
+    }
 
     fun clearProvider() {
         prefs.edit()
