@@ -63,74 +63,24 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val _isCheckingStatus = MutableStateFlow(false)
     val isCheckingStatus: StateFlow<Boolean> = _isCheckingStatus
 
-    private var statusJob: Job? = null
-    private var chatJob: Job? = null
-    private var analysisJob: Job? = null
-        // ═══ Custom Search Engines ═══
+    // ═══ Web Search ═══
+    private val _webSearch = MutableStateFlow(WebSearchState())
+    val webSearch: StateFlow<WebSearchState> = _webSearch
+
+    // ═══ Custom Search Engines ═══
     private val _customEngines = MutableStateFlow<List<CustomSearchEngine>>(emptyList())
     val customEngines: StateFlow<List<CustomSearchEngine>> = _customEngines
 
-    fun loadCustomEngines() {
-        _customEngines.value = settings.getCustomEngines()
-    }
-
-    fun addCustomEngine(engine: CustomSearchEngine) {
-        settings.saveCustomEngine(engine)
-        _customEngines.value = settings.getCustomEngines()
-    }
-
-    fun deleteCustomEngine(id: String) {
-        settings.deleteCustomEngine(id)
-        _customEngines.value = settings.getCustomEngines()
-    }
-
-    fun searchWithCustomEngine(query: String, engine: CustomSearchEngine) {
-        if (query.isBlank()) return
-        if (_webSearch.value.isLoading) return
-
-        viewModelScope.launch {
-            _webSearch.value = WebSearchState(isLoading = true, query = query)
-
-            try {
-                val results = withTimeout(30_000) {
-                    WebSearchEngine.searchCustom(query, engine)
-                }
-
-                if (results.isNotEmpty()) {
-                    _webSearch.value = WebSearchState(
-                        isLoading = false,
-                        query = query,
-                        results = results
-                    )
-                } else {
-                    _webSearch.value = WebSearchState(
-                        isLoading = false,
-                        query = query,
-                        error = "لم يتم العثور على نتائج في ${engine.nameAr}"
-                    )
-                }
-            } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
-                _webSearch.value = WebSearchState(
-                    isLoading = false, query = query,
-                    error = "انتهت مهلة البحث"
-                )
-            } catch (e: Exception) {
-                _webSearch.value = WebSearchState(
-                    isLoading = false, query = query,
-                    error = "خطأ: ${e.message}"
-                )
-            }
-        }
-    }
+    private var statusJob: Job? = null
+    private var chatJob: Job? = null
+    private var analysisJob: Job? = null
 
     // ═══════════════════════════════════════════
-    // SERVICE STATUS — سريع ومنع التكرار
+    // SERVICE STATUS
     // ═══════════════════════════════════════════
 
     fun checkServiceStatus() {
-        // إلغاء أي فحص سابق
         statusJob?.cancel()
-
         statusJob = viewModelScope.launch {
             _isCheckingStatus.value = true
             try {
@@ -139,13 +89,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 }
                 _serviceStatus.value = result
             } catch (e: TimeoutCancellationException) {
-                _serviceStatus.value = CloudVisionManager.ServiceStatus(
-                    error = "انتهت مهلة الفحص"
-                )
+                _serviceStatus.value = CloudVisionManager.ServiceStatus(error = "انتهت مهلة الفحص")
             } catch (e: Exception) {
-                _serviceStatus.value = CloudVisionManager.ServiceStatus(
-                    error = e.message ?: "خطأ غير معروف"
-                )
+                _serviceStatus.value = CloudVisionManager.ServiceStatus(error = e.message ?: "خطأ غير معروف")
             }
             _isCheckingStatus.value = false
         }
@@ -178,7 +124,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     // ═══════════════════════════════════════════
-    // ANALYSIS — مع timeout
+    // ANALYSIS
     // ═══════════════════════════════════════════
 
     fun analyze() {
@@ -186,39 +132,29 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val type = _analysisType.value
 
         analysisJob?.cancel()
-
         analysisJob = viewModelScope.launch {
             _state.value = AnalysisState(isLoading = true, progress = "جاري التحليل...")
             _chatHistory.value = emptyList()
             _lastAnalysisText.value = ""
 
             try {
-                // OCR
                 var ocrText = ""
                 if (settings.ocrEnabled) {
                     _state.value = _state.value.copy(progress = "استخراج النصوص...")
-                    try {
-                        ocrText = OcrEngine.recognize(bitmap)
-                    } catch (_: Exception) {}
+                    try { ocrText = OcrEngine.recognize(bitmap) } catch (_: Exception) {}
                 }
 
-                // Prompt
                 val prompt = buildCloudPrompt(type, ocrText)
 
-                // Cloud analyze — مع timeout
                 _state.value = _state.value.copy(progress = "جاري إرسال الصورة للمزود...")
                 val resultText = withTimeout(90_000) {
                     CloudVisionManager.analyze(bitmap, prompt)
-                }.getOrElse {
-                    throw Exception("فشل التحليل: ${it.message}")
-                }
+                }.getOrElse { throw Exception("فشل التحليل: ${it.message}") }
 
-                // Parse
                 _state.value = _state.value.copy(progress = "جاري معالجة النتائج...")
                 val parsed = parseResult(resultText)
                 _lastAnalysisText.value = buildContextForChat(parsed, ocrText)
 
-                // Search
                 var searchResults = emptyList<SearchResult>()
                 if (settings.searchEnabled && parsed.keywords.isNotEmpty()) {
                     _state.value = _state.value.copy(progress = "جاري البحث...")
@@ -233,10 +169,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 }
 
                 _state.value = AnalysisState(
-                    isLoading = false,
-                    result = parsed,
-                    searchResults = searchResults,
-                    usedMode = AiMode.CLOUD
+                    isLoading = false, result = parsed,
+                    searchResults = searchResults, usedMode = AiMode.CLOUD
                 )
 
                 if (settings.saveHistory) {
@@ -244,27 +178,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 }
 
             } catch (e: TimeoutCancellationException) {
-                _state.value = AnalysisState(
-                    isLoading = false,
-                    error = "انتهت مهلة التحليل — حاول مرة أخرى"
-                )
+                _state.value = AnalysisState(isLoading = false, error = "انتهت مهلة التحليل")
             } catch (e: Exception) {
-                _state.value = AnalysisState(
-                    isLoading = false,
-                    error = "خطأ: ${e.message ?: "غير معروف"}"
-                )
+                _state.value = AnalysisState(isLoading = false, error = "خطأ: ${e.message ?: "غير معروف"}")
             }
         }
     }
 
     // ═══════════════════════════════════════════
-    // CHAT — مُصحح بالكامل: لا ينهار أبداً
-    // ═══════════════════════════════════════════
-
-    
-
-                // ═══════════════════════════════════════════
-    // CHAT — مُصحح: يرسل الصورة دائماً إن وُجدت
+    // CHAT
     // ═══════════════════════════════════════════
 
     fun askQuestion(question: String) {
@@ -272,42 +194,32 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         if (_isChatLoading.value) return
 
         chatJob?.cancel()
-
         chatJob = viewModelScope.launch {
             _isChatLoading.value = true
 
             try {
-                // 1. إضافة رسالة المستخدم
                 val withUserMsg = _chatHistory.value + "USER: $question"
                 _chatHistory.value = withUserMsg
-
-                // 2. إضافة مؤشر التفكير
                 _chatHistory.value = withUserMsg + "AI: 🤔 جاري التفكير..."
 
-                // 3. بناء الطلب
                 val chatPrompt = buildChatPrompt(question, _lastAnalysisText.value)
                 val bitmap = _selectedImage.value
 
-                // 4. إرسال الطلب — دائماً مع صورة إن وُجدت
                 val result: Result<String> = try {
                     withTimeout(90_000) {
                         if (bitmap != null) {
-                            // مع صورة — نفس طريقة التحليل
                             CloudVisionManager.analyze(bitmap, chatPrompt)
                         } else {
-                            // بدون صورة — نص فقط
                             CloudVisionManager.analyzeText(chatPrompt)
                         }
                     }
                 } catch (e: TimeoutCancellationException) {
-                    Result.failure(Exception("انتهت مهلة الاتصال — حاول مرة أخرى"))
+                    Result.failure(Exception("انتهت مهلة الاتصال"))
                 } catch (e: Exception) {
                     Result.failure(Exception("خطأ: ${e.message ?: "غير معروف"}"))
                 }
 
-                // 5. تحديث المحادثة
                 val response = result.getOrElse { "❌ ${it.message}" }
-
                 _chatHistory.value = withUserMsg + "AI: $response"
 
             } catch (e: Exception) {
@@ -323,11 +235,119 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             _isChatLoading.value = false
         }
     }
-        fun clearChat() {
+
+    fun clearChat() {
         chatJob?.cancel()
         _chatHistory.value = emptyList()
         _isChatLoading.value = false
+    }
+
+    // ═══════════════════════════════════════════
+    // WEB SEARCH
+    // ═══════════════════════════════════════════
+
+    fun searchWeb(query: String) {
+        if (query.isBlank()) return
+        if (_webSearch.value.isLoading) return
+
+        viewModelScope.launch {
+            _webSearch.value = WebSearchState(isLoading = true, query = query)
+
+            try {
+                val engineName = settings.searchEngine
+                val customEngines = settings.getCustomEngines()
+
+                // هل محرك مخصص؟
+                val customEngine = customEngines.find { it.id == engineName }
+                if (customEngine != null) {
+                    val results = withTimeout(30_000) {
+                        WebSearchEngine.searchCustom(query, customEngine)
+                    }
+                    _webSearch.value = if (results.isNotEmpty()) {
+                        WebSearchState(isLoading = false, query = query, results = results)
+                    } else {
+                        WebSearchState(isLoading = false, query = query, error = "لم يتم العثور على نتائج في ${customEngine.nameAr}")
+                    }
+                    return@launch
+                }
+
+                // محرك قياسي
+                val engine = try {
+                    SearchEngine.valueOf(engineName)
+                } catch (_: Exception) {
+                    SearchEngine.SEARXNG
+                }
+
+                val results = withTimeout(30_000) {
+                    WebSearchEngine.search(query, engine)
+                }
+
+                if (results.isNotEmpty()) {
+                    _webSearch.value = WebSearchState(isLoading = false, query = query, results = results)
+                } else {
+                    val fallback = withTimeout(30_000) {
+                        WebSearchEngine.search(query, SearchEngine.MULTI)
+                    }
+                    _webSearch.value = if (fallback.isNotEmpty()) {
+                        WebSearchState(isLoading = false, query = query, results = fallback)
+                    } else {
+                        WebSearchState(isLoading = false, query = query, error = "لم يتم العثور على نتائج")
+                    }
+                }
+            } catch (e: TimeoutCancellationException) {
+                _webSearch.value = WebSearchState(isLoading = false, query = query, error = "انتهت مهلة البحث")
+            } catch (e: Exception) {
+                _webSearch.value = WebSearchState(isLoading = false, query = query, error = "خطأ: ${e.message}")
+            }
         }
+    }
+
+    fun clearSearch() {
+        _webSearch.value = WebSearchState()
+    }
+
+    // ═══════════════════════════════════════════
+    // CUSTOM SEARCH ENGINES
+    // ═══════════════════════════════════════════
+
+    fun loadCustomEngines() {
+        _customEngines.value = settings.getCustomEngines()
+    }
+
+    fun addCustomEngine(engine: CustomSearchEngine) {
+        settings.saveCustomEngine(engine)
+        _customEngines.value = settings.getCustomEngines()
+    }
+
+    fun deleteCustomEngine(id: String) {
+        settings.deleteCustomEngine(id)
+        _customEngines.value = settings.getCustomEngines()
+    }
+
+    fun searchWithCustomEngine(query: String, engine: CustomSearchEngine) {
+        if (query.isBlank()) return
+        if (_webSearch.value.isLoading) return
+
+        viewModelScope.launch {
+            _webSearch.value = WebSearchState(isLoading = true, query = query)
+
+            try {
+                val results = withTimeout(30_000) {
+                    WebSearchEngine.searchCustom(query, engine)
+                }
+
+                _webSearch.value = if (results.isNotEmpty()) {
+                    WebSearchState(isLoading = false, query = query, results = results)
+                } else {
+                    WebSearchState(isLoading = false, query = query, error = "لم يتم العثور على نتائج في ${engine.nameAr}")
+                }
+            } catch (e: TimeoutCancellationException) {
+                _webSearch.value = WebSearchState(isLoading = false, query = query, error = "انتهت مهلة البحث")
+            } catch (e: Exception) {
+                _webSearch.value = WebSearchState(isLoading = false, query = query, error = "خطأ: ${e.message}")
+            }
+        }
+    }
 
     // ═══════════════════════════════════════════
     // PROMPTS
@@ -424,95 +444,14 @@ $context
             fullText = text
         )
     }
-        // ═══ Web Search ═══
-    
-                // ═══ Web Search ═══
-    private val _webSearch = MutableStateFlow(WebSearchState())
-    val webSearch: StateFlow<WebSearchState> = _webSearch
-
-        fun searchWeb(query: String) {
-        if (query.isBlank()) return
-        if (_webSearch.value.isLoading) return
-
-        viewModelScope.launch {
-            _webSearch.value = WebSearchState(isLoading = true, query = query)
-
-            try {
-                val engineName = settings.searchEngine
-                val customEngines = settings.getCustomEngines()
-
-                // هل محرك مخصص؟
-                val customEngine = customEngines.find { it.id == engineName }
-                if (customEngine != null) {
-                    val results = withTimeout(30_000) {
-                        WebSearchEngine.searchCustom(query, customEngine)
-                    }
-                    _webSearch.value = if (results.isNotEmpty()) {
-                        WebSearchState(isLoading = false, query = query, results = results)
-                    } else {
-                        WebSearchState(isLoading = false, query = query, error = "لم يتم العثور على نتائج")
-                    }
-                    return@launch
-                }
-
-                // محرك قياسي
-                val engine = try {
-                    SearchEngine.valueOf(engineName)
-                } catch (_: Exception) {
-                    SearchEngine.SEARXNG
-                }
-
-                val results = withTimeout(30_000) {
-                    WebSearchEngine.search(query, engine)
-                }
-
-                if (results.isNotEmpty()) {
-                    _webSearch.value = WebSearchState(
-                        isLoading = false, query = query, results = results
-                    )
-                } else {
-                    // احتياطي
-                    val fallback = withTimeout(30_000) {
-                        WebSearchEngine.search(query, SearchEngine.MULTI)
-                    }
-                    _webSearch.value = if (fallback.isNotEmpty()) {
-                        WebSearchState(isLoading = false, query = query, results = fallback)
-                    } else {
-                        WebSearchState(isLoading = false, query = query, error = "لم يتم العثور على نتائج")
-                    }
-                }
-            } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
-                _webSearch.value = WebSearchState(
-                    isLoading = false, query = query,
-                    error = "انتهت مهلة البحث"
-                )
-            } catch (e: Exception) {
-                _webSearch.value = WebSearchState(
-                    isLoading = false, query = query,
-                    error = "خطأ: ${e.message}"
-                )
-            }
-        }
-        }
-
-    fun clearSearch() {
-        _webSearch.value = WebSearchState()
-    }
-        
-        
-
-    
-
 
     // ═══════════════════════════════════════════
     // HISTORY
     // ═══════════════════════════════════════════
 
     private fun saveToHistory(
-        type: AnalysisType,
-        result: AnalysisResult,
-        search: List<SearchResult>,
-        uri: String
+        type: AnalysisType, result: AnalysisResult,
+        search: List<SearchResult>, uri: String
     ) {
         viewModelScope.launch {
             try {
@@ -536,18 +475,13 @@ $context
 
     fun loadHistory() {
         viewModelScope.launch {
-            try {
-                _history.value = db.analysisDao().getAll()
-            } catch (_: Exception) {}
+            try { _history.value = db.analysisDao().getAll() } catch (_: Exception) {}
         }
     }
 
     fun deleteHistoryItem(entity: AnalysisEntity) {
         viewModelScope.launch {
-            try {
-                db.analysisDao().delete(entity)
-                loadHistory()
-            } catch (_: Exception) {}
+            try { db.analysisDao().delete(entity); loadHistory() } catch (_: Exception) {}
         }
     }
 
