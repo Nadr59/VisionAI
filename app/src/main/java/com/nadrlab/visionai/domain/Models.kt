@@ -70,3 +70,51 @@ data class WebSearchState(
     val results: List<SearchResult> = emptyList(),
     val error: String = ""
 )
+data class CustomSearchEngine(
+    val id: String = System.currentTimeMillis().toString(),
+    val name: String = "",
+    val nameAr: String = "",
+    val urlTemplate: String = "",
+    val icon: String = "🔍"
+) {
+    companion object {
+        val EXAMPLES = listOf(
+            CustomSearchEngine(
+                name = "Yandex",
+                nameAr = "ياندكس",
+                urlTemplate = "https://yandex.com/search/?text={query}",
+                icon = "🔴"
+            ),
+            CustomSearchEngine(
+                name = "Bing",
+                nameAr = "بينغ",
+                urlTemplate = "https://www.bing.com/search?q={query}",
+                icon = "🔵"
+            ),
+            CustomSearchEngine(
+                name = "Baidu",
+                nameAr = "بايدو",
+                urlTemplate = "https://www.baidu.com/s?wd={query}",
+                icon = "🇨🇳"
+            ),
+            CustomSearchEngine(
+                name = "Ecosia",
+                nameAr = "إيكوسيا",
+                urlTemplate = "https://www.ecosia.org/search?q={query}",
+                icon = "🌳"
+            ),
+            CustomSearchEngine(
+                name = "Brave",
+                nameAr = "بريف",
+                urlTemplate = "https://search.brave.com/search?q={query}",
+                icon = "🦁"
+            ),
+            CustomSearchEngine(
+                name = "Startpage",
+                nameAr = "ستارت بيج",
+                urlTemplate = "https://www.startpage.com/do/search?q={query}",
+                icon = "👁️"
+            )
+        )
+    }
+}
