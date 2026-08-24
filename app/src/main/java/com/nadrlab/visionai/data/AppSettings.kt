@@ -1,6 +1,9 @@
 package com.nadrlab.visionai.data
 
 import android.content.Context
+import com.nadrlab.visionai.domain.CustomSearchEngine
+import org.json.JSONArray
+import org.json.JSONObject
 
 class AppSettings(context: Context) {
 
@@ -37,7 +40,8 @@ class AppSettings(context: Context) {
     var defaultAnalysisType: String
         get() = prefs.getString("analysis_type", "GENERAL") ?: "GENERAL"
         set(v) = prefs.edit().putString("analysis_type", v).apply()
-            var searchEngine: String
+
+    var searchEngine: String
         get() = prefs.getString("search_engine", "SEARXNG") ?: "SEARXNG"
         set(v) = prefs.edit().putString("search_engine", v).apply()
 
@@ -53,11 +57,21 @@ class AppSettings(context: Context) {
             .putString("provider_model", model)
             .apply()
     }
-        // ═══ محركات بحث مخصصة ═══
+
+    fun clearProvider() {
+        prefs.edit()
+            .remove("provider_name")
+            .remove("provider_url")
+            .remove("provider_key")
+            .remove("provider_model")
+            .apply()
+    }
+
+    // ═══ محركات بحث مخصصة ═══
     fun getCustomEngines(): List<CustomSearchEngine> {
         val json = prefs.getString("custom_engines", "[]") ?: "[]"
         return try {
-            val arr = org.json.JSONArray(json)
+            val arr = JSONArray(json)
             (0 until arr.length()).map { i ->
                 val obj = arr.getJSONObject(i)
                 CustomSearchEngine(
@@ -85,9 +99,9 @@ class AppSettings(context: Context) {
     }
 
     private fun saveCustomEnginesList(list: List<CustomSearchEngine>) {
-        val arr = org.json.JSONArray()
+        val arr = JSONArray()
         list.forEach { engine ->
-            arr.put(org.json.JSONObject().apply {
+            arr.put(JSONObject().apply {
                 put("id", engine.id)
                 put("name", engine.name)
                 put("nameAr", engine.nameAr)
@@ -96,14 +110,5 @@ class AppSettings(context: Context) {
             })
         }
         prefs.edit().putString("custom_engines", arr.toString()).apply()
-    }
-
-    fun clearProvider() {
-        prefs.edit()
-            .remove("provider_name")
-            .remove("provider_url")
-            .remove("provider_key")
-            .remove("provider_model")
-            .apply()
     }
 }
