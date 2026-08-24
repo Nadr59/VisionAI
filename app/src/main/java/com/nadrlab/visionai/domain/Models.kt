@@ -51,3 +51,9 @@ data class AnalysisState(
     val progress: String = "",
     val usedMode: AiMode = AiMode.CLOUD
 )
+data class WebSearchState(
+    val isLoading: Boolean = false,
+    val query: String = "",
+    val results: List<SearchResult> = emptyList(),
+    val error: String = ""
+)
