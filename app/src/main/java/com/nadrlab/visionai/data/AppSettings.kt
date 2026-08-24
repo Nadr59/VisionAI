@@ -37,6 +37,9 @@ class AppSettings(context: Context) {
     var defaultAnalysisType: String
         get() = prefs.getString("analysis_type", "GENERAL") ?: "GENERAL"
         set(v) = prefs.edit().putString("analysis_type", v).apply()
+            var searchEngine: String
+        get() = prefs.getString("search_engine", "SEARXNG") ?: "SEARXNG"
+        set(v) = prefs.edit().putString("search_engine", v).apply()
 
     fun isCustomProviderConfigured(): Boolean {
         return providerUrl.isNotBlank() && providerKey.isNotBlank()
@@ -50,6 +53,7 @@ class AppSettings(context: Context) {
             .putString("provider_model", model)
             .apply()
     }
+    
 
     fun clearProvider() {
         prefs.edit()
