@@ -369,10 +369,12 @@ $context
         )
     }
         // ═══ Web Search ═══
+    
+                // ═══ Web Search ═══
     private val _webSearch = MutableStateFlow(WebSearchState())
     val webSearch: StateFlow<WebSearchState> = _webSearch
 
-        fun searchWeb(query: String) {
+    fun searchWeb(query: String) {
         if (query.isBlank()) return
         if (_webSearch.value.isLoading) return
 
@@ -380,8 +382,15 @@ $context
             _webSearch.value = WebSearchState(isLoading = true, query = query)
 
             try {
+                val engineName = settings.searchEngine
+                val engine = try {
+                    SearchEngine.valueOf(engineName)
+                } catch (_: Exception) {
+                    SearchEngine.SEARXNG
+                }
+
                 val results = withTimeout(30_000) {
-                    WebSearchEngine.search(query)
+                    WebSearchEngine.search(query, engine)
                 }
 
                 if (results.isNotEmpty()) {
@@ -391,31 +400,38 @@ $context
                         results = results
                     )
                 } else {
-                    _webSearch.value = WebSearchState(
-                        isLoading = false,
-                        query = query,
-                        error = "لم يتم العثور على نتائج لـ \"$query\""
-                    )
+                    // جرب البحث الشامل كاحتياطي
+                    val fallbackResults = withTimeout(30_000) {
+                        WebSearchEngine.search(query, SearchEngine.MULTI)
+                    }
+                    _webSearch.value = if (fallbackResults.isNotEmpty()) {
+                        WebSearchState(isLoading = false, query = query, results = fallbackResults)
+                    } else {
+                        WebSearchState(isLoading = false, query = query, error = "لم يتم العثور على نتائج")
+                    }
                 }
             } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
                 _webSearch.value = WebSearchState(
-                    isLoading = false,
-                    query = query,
+                    isLoading = false, query = query,
                     error = "انتهت مهلة البحث — حاول مرة أخرى"
                 )
             } catch (e: Exception) {
                 _webSearch.value = WebSearchState(
-                    isLoading = false,
-                    query = query,
-                    error = "خطأ في البحث: ${e.message ?: "غير معروف"}"
+                    isLoading = false, query = query,
+                    error = "خطأ: ${e.message ?: "غير معروف"}"
                 )
             }
         }
-        }
+    }
 
     fun clearSearch() {
         _webSearch.value = WebSearchState()
     }
+        
+        
+
+    
+
 
     // ═══════════════════════════════════════════
     // HISTORY
