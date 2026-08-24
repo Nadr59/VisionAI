@@ -49,8 +49,10 @@ fun MainScreen(vm: MainViewModel) {
     val isChatLoading by vm.isChatLoading.collectAsState()
     val serviceStatus by vm.serviceStatus.collectAsState()
     val isCheckingStatus by vm.isCheckingStatus.collectAsState()
+    val webSearch by vm.webSearch.collectAsState()
 
     var chatInput by remember { mutableStateOf("") }
+    var searchInput by remember { mutableStateOf("") }
 
     val imagePicker = rememberLauncherForActivityResult(
         ActivityResultContracts.GetContent()
@@ -135,7 +137,6 @@ fun MainScreen(vm: MainViewModel) {
         vm.checkServiceStatus()
     }
 
-    // ═══ كل المحتوى داخل SelectionContainer للنسخ ═══
     SelectionContainer {
         LazyColumn(
             modifier = Modifier
@@ -151,6 +152,145 @@ fun MainScreen(vm: MainViewModel) {
                     isChecking = isCheckingStatus,
                     onRefresh = { vm.checkServiceStatus() }
                 )
+            }
+
+            // ═══ ═══ ═══ ═══ ═══ ═══ ═══ ═══
+            // ═══ البحث في الإنترنت ═══
+            // ═══ ═══ ═══ ═══ ═══ ═══ ═══ ═══
+            item {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFF1A1A2E))
+                ) {
+                    Column(modifier = Modifier.padding(12.dp)) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.Search, null,
+                                tint = Color(0xFFE8C547),
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Text(
+                                "البحث في الإنترنت",
+                                color = Color(0xFFE8C547),
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 14.sp
+                            )
+                        }
+
+                        Spacer(Modifier.height(8.dp))
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            OutlinedTextField(
+                                value = searchInput,
+                                onValueChange = { searchInput = it },
+                                modifier = Modifier.weight(1f),
+                                placeholder = {
+                                    Text("ابحث عن أي شيء...", color = Color(0xFF555555))
+                                },
+                                singleLine = true,
+                                shape = RoundedCornerShape(12.dp),
+                                textStyle = LocalTextStyle.current.copy(
+                                    color = Color.White, fontSize = 13.sp
+                                ),
+                                colors = OutlinedTextFieldDefaults.colors(
+                                    focusedBorderColor = Color(0xFF38BDF8),
+                                    unfocusedBorderColor = Color(0xFF333355),
+                                    cursorColor = Color(0xFF38BDF8)
+                                )
+                            )
+
+                            IconButton(
+                                onClick = {
+                                    if (searchInput.isNotBlank()) {
+                                        vm.searchWeb(searchInput)
+                                    }
+                                },
+                                enabled = searchInput.isNotBlank() && !webSearch.isLoading,
+                                modifier = Modifier
+                                    .size(48.dp)
+                                    .background(
+                                        if (searchInput.isNotBlank() && !webSearch.isLoading)
+                                            Color(0xFF38BDF8)
+                                        else Color(0xFF252542),
+                                        CircleShape
+                                    )
+                            ) {
+                                if (webSearch.isLoading) {
+                                    CircularProgressIndicator(
+                                        Modifier.size(20.dp),
+                                        strokeWidth = 2.dp,
+                                        color = Color.White
+                                    )
+                                } else {
+                                    Icon(
+                                        Icons.Default.Search, "بحث",
+                                        tint = if (searchInput.isNotBlank())
+                                            Color.White else Color(0xFF555555)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // ═══ نتائج البحث ═══
+            if (webSearch.results.isNotEmpty()) {
+                item {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            "نتائج البحث: ${webSearch.query}",
+                            fontWeight = FontWeight.Bold, fontSize = 14.sp,
+                            color = Color(0xFFE8C547)
+                        )
+                        IconButton(
+                            onClick = { vm.clearSearch() },
+                            modifier = Modifier.size(28.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.Close, "مسح",
+                                modifier = Modifier.size(16.dp),
+                                tint = Color(0xFF888888)
+                            )
+                        }
+                    }
+                }
+                items(webSearch.results) { result ->
+                    SearchResultCard(result)
+                }
+            }
+
+            // ═══ خطأ البحث ═══
+            if (webSearch.error.isNotBlank()) {
+                item {
+                    Card(
+                        colors = CardDefaults.cardColors(
+                            containerColor = Color(0xFFFF6B6B).copy(0.1f)
+                        ),
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Row(
+                            Modifier.padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(Icons.Default.ErrorOutline, null, tint = Color(0xFFFF6B6B))
+                            Spacer(Modifier.width(8.dp))
+                            Text(webSearch.error, color = Color(0xFFFF6B6B), fontSize = 13.sp)
+                        }
+                    }
+                }
             }
 
             // ═══ صورة ═══
@@ -306,19 +446,19 @@ fun MainScreen(vm: MainViewModel) {
                 }
             }
 
-            // ═══ النتائج — قابلة للنسخ ═══
+            // ═══ النتائج ═══
             state.result?.let { result ->
                 item { AnalysisResultCard(result) }
             }
 
-            // ═══ نتائج البحث — قابلة للنقر والنسخ ═══
+            // ═══ نتائج بحث التحليل ═══
             if (state.searchResults.isNotEmpty()) {
                 item {
                     Text(
-                        "نتائج البحث",
-                        fontWeight = FontWeight.Bold, fontSize = 16.sp,
+                        "نتائج متعلقة",
+                        fontWeight = FontWeight.Bold, fontSize = 14.sp,
                         color = Color(0xFFE8C547),
-                        modifier = Modifier.padding(top = 8.dp)
+                        modifier = Modifier.padding(top = 4.dp)
                     )
                 }
                 items(state.searchResults) { result ->
@@ -531,7 +671,7 @@ fun ServiceStatusCard(
     }
 }
 
-// ═══ بطاقة نتيجة التحليل — قابلة للنسخ ═══
+// ═══ بطاقة نتيجة التحليل ═══
 @Composable
 fun AnalysisResultCard(result: AnalysisResult) {
     val context = LocalContext.current
@@ -542,7 +682,6 @@ fun AnalysisResultCard(result: AnalysisResult) {
         colors = CardDefaults.cardColors(containerColor = Color(0xFF1A1A2E))
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
-            // العنوان + زر نسخ الكل
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -560,7 +699,6 @@ fun AnalysisResultCard(result: AnalysisResult) {
                     Text(result.confidence.label, fontSize = 11.sp, color = Color(0xFF888888))
                 }
 
-                // زر نسخ الكل
                 IconButton(
                     onClick = {
                         val fullText = buildString {
@@ -653,7 +791,7 @@ fun AnalysisResultCard(result: AnalysisResult) {
     }
 }
 
-// ═══ بطاقة نتيجة بحث — قابلة للنقر والنسخ ═══
+// ═══ بطاقة نتيجة بحث ═══
 @Composable
 fun SearchResultCard(result: SearchResult) {
     val context = LocalContext.current
@@ -664,7 +802,6 @@ fun SearchResultCard(result: SearchResult) {
         colors = CardDefaults.cardColors(containerColor = Color(0xFF252542))
     ) {
         Column(modifier = Modifier.padding(12.dp)) {
-            // العنوان — قابل للنقر لفتح الرابط
             Text(
                 result.title,
                 fontWeight = FontWeight.Bold,
@@ -693,13 +830,11 @@ fun SearchResultCard(result: SearchResult) {
 
             Spacer(Modifier.height(6.dp))
 
-            // صف الرابط + أزرار
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // الرابط — قابل للنقر
                 Text(
                     result.source,
                     fontSize = 11.sp,
@@ -716,7 +851,6 @@ fun SearchResultCard(result: SearchResult) {
                         }
                 )
 
-                // زر نسخ الرابط
                 IconButton(
                     onClick = {
                         val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE)
@@ -735,7 +869,6 @@ fun SearchResultCard(result: SearchResult) {
                     )
                 }
 
-                // زر فتح في المتصفح
                 IconButton(
                     onClick = {
                         try {
