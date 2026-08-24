@@ -372,8 +372,9 @@ $context
     private val _webSearch = MutableStateFlow(WebSearchState())
     val webSearch: StateFlow<WebSearchState> = _webSearch
 
-    fun searchWeb(query: String) {
+        fun searchWeb(query: String) {
         if (query.isBlank()) return
+        if (_webSearch.value.isLoading) return
 
         viewModelScope.launch {
             _webSearch.value = WebSearchState(isLoading = true, query = query)
@@ -383,20 +384,34 @@ $context
                     WebSearchEngine.search(query)
                 }
 
+                if (results.isNotEmpty()) {
+                    _webSearch.value = WebSearchState(
+                        isLoading = false,
+                        query = query,
+                        results = results
+                    )
+                } else {
+                    _webSearch.value = WebSearchState(
+                        isLoading = false,
+                        query = query,
+                        error = "لم يتم العثور على نتائج لـ \"$query\""
+                    )
+                }
+            } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
                 _webSearch.value = WebSearchState(
                     isLoading = false,
                     query = query,
-                    results = results
+                    error = "انتهت مهلة البحث — حاول مرة أخرى"
                 )
             } catch (e: Exception) {
                 _webSearch.value = WebSearchState(
                     isLoading = false,
                     query = query,
-                    error = "خطأ: ${e.message ?: "فشل البحث"}"
+                    error = "خطأ في البحث: ${e.message ?: "غير معروف"}"
                 )
             }
         }
-    }
+        }
 
     fun clearSearch() {
         _webSearch.value = WebSearchState()
