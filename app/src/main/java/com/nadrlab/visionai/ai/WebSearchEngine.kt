@@ -1,10 +1,12 @@
 package com.nadrlab.visionai.ai
 
+import com.nadrlab.visionai.domain.CustomSearchEngine
 import com.nadrlab.visionai.domain.SearchEngine
 import com.nadrlab.visionai.domain.SearchResult
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -22,7 +24,7 @@ object WebSearchEngine {
         .build()
 
     // ═══════════════════════════════════════════
-    //  بحث رئيسي — يختار المحرك تلقائياً
+    //  بحث رئيسي
     // ═══════════════════════════════════════════
 
     suspend fun search(
@@ -42,7 +44,6 @@ object WebSearchEngine {
                     SearchEngine.MULTI -> searchMulti(query)
                 }
             } catch (e: Exception) {
-                // فشل — جرب ويكيبيديا كاحتياطي
                 try {
                     searchWikipedia(URLEncoder.encode(query, "UTF-8"))
                 } catch (_: Exception) {
@@ -53,7 +54,7 @@ object WebSearchEngine {
     }
 
     // ═══════════════════════════════════════════
-    //  1. SearXNG — يجمع عدة محركات
+    //  1. SearXNG
     // ═══════════════════════════════════════════
 
     private val searxngInstances = listOf(
@@ -89,7 +90,7 @@ object WebSearchEngine {
                         val title = item.optString("title", "")
                         val urlStr = item.optString("url", "")
                         val snippet = item.optString("content", "")
-                        val engine = item.optString("engine", "")
+                        val eng = item.optString("engine", "")
 
                         if (title.isNotBlank() && urlStr.isNotBlank()) {
                             parsed.add(
@@ -97,7 +98,7 @@ object WebSearchEngine {
                                     title = title.take(150),
                                     url = urlStr,
                                     snippet = snippet.take(400),
-                                    source = "${extractDomain(urlStr)} · $engine"
+                                    source = "${extractDomain(urlStr)} · $eng"
                                 )
                             )
                         }
@@ -113,13 +114,12 @@ object WebSearchEngine {
     }
 
     // ═══════════════════════════════════════════
-    //  2. DuckDuckGo — Instant API + HTML
+    //  2. DuckDuckGo
     // ═══════════════════════════════════════════
 
     private fun searchDuckDuckGo(encoded: String): List<SearchResult> {
         val results = mutableListOf<SearchResult>()
 
-        // Instant API
         try {
             val url = "https://api.duckduckgo.com/?q=$encoded&format=json&no_html=1&skip_disambig=1"
             val request = Request.Builder().url(url)
@@ -130,12 +130,14 @@ object WebSearchEngine {
             val abstract = json.optString("Abstract", "")
             val abstractUrl = json.optString("AbstractURL", "")
             if (abstract.isNotBlank() && abstractUrl.isNotBlank()) {
-                results.add(SearchResult(
-                    title = json.optString("AbstractSource", "DuckDuckGo"),
-                    url = abstractUrl,
-                    snippet = abstract.take(400),
-                    source = extractDomain(abstractUrl)
-                ))
+                results.add(
+                    SearchResult(
+                        title = json.optString("AbstractSource", "DuckDuckGo"),
+                        url = abstractUrl,
+                        snippet = abstract.take(400),
+                        source = extractDomain(abstractUrl)
+                    )
+                )
             }
 
             val topics = json.optJSONArray("RelatedTopics") ?: JSONArray()
@@ -144,17 +146,18 @@ object WebSearchEngine {
                 val text = t.optString("Text", "")
                 val firstUrl = t.optString("FirstURL", "")
                 if (text.isNotBlank() && firstUrl.isNotBlank()) {
-                    results.add(SearchResult(
-                        title = text.take(100),
-                        url = firstUrl,
-                        snippet = text.take(400),
-                        source = extractDomain(firstUrl)
-                    ))
+                    results.add(
+                        SearchResult(
+                            title = text.take(100),
+                            url = firstUrl,
+                            snippet = text.take(400),
+                            source = extractDomain(firstUrl)
+                        )
+                    )
                 }
             }
         } catch (_: Exception) {}
 
-        // HTML
         if (results.isEmpty()) {
             try {
                 val url = "https://html.duckduckgo.com/html/?q=$encoded"
@@ -171,29 +174,45 @@ object WebSearchEngine {
 
     private fun parseDuckDuckGoHtml(html: String): List<SearchResult> {
         val results = mutableListOf<SearchResult>()
-        val titlePattern = Regex("""<a[^>]*class="result__a"[^>]*href="([^"]*)"[^>]*>(.*?)</a>""", RegexOption.DOT_MATCHES_ALL)
-        val snippetPattern = Regex("""<a[^>]*class="result__snippet"[^>]*>(.*?)</a>""", RegexOption.DOT_MATCHES_ALL)
+        val titlePattern = Regex(
+            """<a[^>]*class="result__a"[^>]*href="([^"]*)"[^>]*>(.*?)</a>""",
+            RegexOption.DOT_MATCHES_ALL
+        )
+        val snippetPattern = Regex(
+            """<a[^>]*class="result__snippet"[^>]*>(.*?)</a>""",
+            RegexOption.DOT_MATCHES_ALL
+        )
 
         val titles = titlePattern.findAll(html).toList()
         val snippets = snippetPattern.findAll(html).toList()
 
         for (i in titles.indices.take(10)) {
             val rawUrl = titles[i].groupValues[1]
-            val title = titles[i].groupValues[2].replace(Regex("<[^>]+>"), "").replace("&amp;", "&").trim()
+            val title = titles[i].groupValues[2]
+                .replace(Regex("<[^>]+>"), "")
+                .replace("&amp;", "&")
+                .trim()
             val cleanUrl = extractRealUrl(rawUrl)
             val snippet = if (i < snippets.size) {
-                snippets[i].groupValues[1].replace(Regex("<[^>]+>"), "").replace("&amp;", "&").trim()
+                snippets[i].groupValues[1]
+                    .replace(Regex("<[^>]+>"), "")
+                    .replace("&amp;", "&")
+                    .trim()
             } else ""
 
             if (title.isNotBlank() && cleanUrl.isNotBlank()) {
-                results.add(SearchResult(title.take(120), cleanUrl, snippet.take(400), extractDomain(cleanUrl)))
+                results.add(
+                    SearchResult(
+                        title.take(120), cleanUrl, snippet.take(400), extractDomain(cleanUrl)
+                    )
+                )
             }
         }
         return results
     }
 
     // ═══════════════════════════════════════════
-    //  3. Wikipedia — عربي + إنجليزي
+    //  3. Wikipedia
     // ═══════════════════════════════════════════
 
     private fun searchWikipedia(encoded: String): List<SearchResult> {
@@ -202,7 +221,8 @@ object WebSearchEngine {
         // عربي
         try {
             val url = "https://ar.wikipedia.org/w/api.php?action=query&list=search&srsearch=$encoded&format=json&srlimit=5"
-            val request = Request.Builder().url(url).addHeader("User-Agent", "VisionAI/2.0").build()
+            val request = Request.Builder().url(url)
+                .addHeader("User-Agent", "VisionAI/2.0").build()
             val body = client.newCall(request).execute().body?.string() ?: ""
             val search = JSONObject(body).getJSONObject("query").optJSONArray("search") ?: JSONArray()
 
@@ -220,7 +240,8 @@ object WebSearchEngine {
         // إنجليزي
         try {
             val url = "https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=$encoded&format=json&srlimit=5"
-            val request = Request.Builder().url(url).addHeader("User-Agent", "VisionAI/2.0").build()
+            val request = Request.Builder().url(url)
+                .addHeader("User-Agent", "VisionAI/2.0").build()
             val body = client.newCall(request).execute().body?.string() ?: ""
             val search = JSONObject(body).getJSONObject("query").optJSONArray("search") ?: JSONArray()
 
@@ -239,7 +260,7 @@ object WebSearchEngine {
     }
 
     // ═══════════════════════════════════════════
-    //  4. Google Lite — بحث جوجل المبسط
+    //  4. Google Lite
     // ═══════════════════════════════════════════
 
     private fun searchGoogleLite(encoded: String): List<SearchResult> {
@@ -258,9 +279,10 @@ object WebSearchEngine {
 
     private fun parseGoogleHtml(html: String): List<SearchResult> {
         val results = mutableListOf<SearchResult>()
-
-        // نمط بحث جوجل
-        val linkPattern = Regex("""<a[^>]*href="/url\?q=([^&"]+)[^"]*"[^>]*>(.*?)</a>""", RegexOption.DOT_MATCHES_ALL)
+        val linkPattern = Regex(
+            """<a[^>]*href="/url\?q=([^&"]+)[^"]*"[^>]*>(.*?)</a>""",
+            RegexOption.DOT_MATCHES_ALL
+        )
         val matches = linkPattern.findAll(html).toList()
 
         for (match in matches.take(10)) {
@@ -271,7 +293,9 @@ object WebSearchEngine {
                 .replace("&#39;", "'")
                 .trim()
 
-            val cleanUrl = java.net.URLDecoder.decode(rawUrl, "UTF-8")
+            val cleanUrl = try {
+                java.net.URLDecoder.decode(rawUrl, "UTF-8")
+            } catch (_: Exception) { rawUrl }
 
             if (title.isNotBlank() && cleanUrl.isNotBlank() && !cleanUrl.contains("google.com")) {
                 results.add(
@@ -289,13 +313,11 @@ object WebSearchEngine {
     }
 
     // ═══════════════════════════════════════════
-    //  5. Archive.org — أرشيف الإنترنت
+    //  5. Archive.org
     // ═══════════════════════════════════════════
 
     private fun searchArchive(encoded: String): List<SearchResult> {
         return try {
-            val url = "https://web.archive.org/__wb/sparkline?output=json&url=$encoded&collection=web"
-            // بديل: CDX API
             val cdxUrl = "https://web.archive.org/cdx/search/cdx?url=*$encoded*&output=json&limit=10&fl=original,timestamp,statuscode"
             val request = Request.Builder().url(cdxUrl)
                 .addHeader("User-Agent", "VisionAI/2.0").build()
@@ -307,7 +329,7 @@ object WebSearchEngine {
             val results = mutableListOf<SearchResult>()
             val seen = mutableSetOf<String>()
 
-            for (i in 1 until arr.length()) { // skip header row
+            for (i in 1 until arr.length()) {
                 val row = arr.getJSONArray(i)
                 val original = row.optString(0, "")
                 val timestamp = row.optString(1, "")
@@ -333,38 +355,40 @@ object WebSearchEngine {
     }
 
     // ═══════════════════════════════════════════
-    //  6. بحث شامل — كل المحركات معاً
+    //  6. بحث شامل — كل المحركات بالتوازي
     // ═══════════════════════════════════════════
 
     private suspend fun searchMulti(query: String): List<SearchResult> {
         val encoded = URLEncoder.encode(query, "UTF-8")
 
-        val deferreds = listOf(
-            kotlinx.coroutines.async(Dispatchers.IO) {
-                try { searchSearXNG(query) } catch (_: Exception) { emptyList() }
-            },
-            kotlinx.coroutines.async(Dispatchers.IO) {
-                try { searchDuckDuckGo(encoded) } catch (_: Exception) { emptyList() }
-            },
-            kotlinx.coroutines.async(Dispatchers.IO) {
-                try { searchWikipedia(encoded) } catch (_: Exception) { emptyList() }
-            },
-            kotlinx.coroutines.async(Dispatchers.IO) {
-                try { searchGoogleLite(encoded) } catch (_: Exception) { emptyList() }
-            }
-        )
+        return coroutineScope {
+            val deferreds = listOf(
+                async(Dispatchers.IO) {
+                    try { searchSearXNG(query) } catch (_: Exception) { emptyList() }
+                },
+                async(Dispatchers.IO) {
+                    try { searchDuckDuckGo(encoded) } catch (_: Exception) { emptyList() }
+                },
+                async(Dispatchers.IO) {
+                    try { searchWikipedia(encoded) } catch (_: Exception) { emptyList() }
+                },
+                async(Dispatchers.IO) {
+                    try { searchGoogleLite(encoded) } catch (_: Exception) { emptyList() }
+                }
+            )
 
-        val allResults = deferreds.awaitAll().flatten()
+            val allResults = deferreds.awaitAll().flatten()
 
-        // إزالة التكرار مع الحفاظ على الترتيب
-        val seen = mutableSetOf<String>()
-        return allResults.filter { result ->
-            val key = result.url.removeSuffix("/")
-            if (key in seen) false else { seen.add(key); true }
-        }.take(20)
+            val seen = mutableSetOf<String>()
+            allResults.filter { result ->
+                val key = result.url.removeSuffix("/")
+                if (key in seen) false else { seen.add(key); true }
+            }.take(20)
+        }
     }
-        // ═══════════════════════════════════════════
-    //  بحث محرك مخصص — يعمل مع أي محرك
+
+    // ═══════════════════════════════════════════
+    //  محرك مخصص
     // ═══════════════════════════════════════════
 
     suspend fun searchCustom(
@@ -388,7 +412,6 @@ object WebSearchEngine {
 
                 if (html.isBlank()) return@withContext emptyList()
 
-                // تحليل HTML — يبحث عن أي رابط في الصفحة
                 parseGenericHtml(html, engine.name)
             } catch (e: Exception) {
                 emptyList()
@@ -396,13 +419,14 @@ object WebSearchEngine {
         }
     }
 
-    // ═══ تحليل HTML عام — يعمل مع أي محرك ═══
     private fun parseGenericHtml(html: String, engineName: String): List<SearchResult> {
         val results = mutableListOf<SearchResult>()
         val seen = mutableSetOf<String>()
 
-        // البحث عن كل الروابط في الصفحة
-        val linkPattern = Regex("""<a[^>]*href="(https?://[^"]+)"[^>]*>(.*?)</a>""", RegexOption.DOT_MATCHES_ALL)
+        val linkPattern = Regex(
+            """<a[^>]*href="(https?://[^"]+)"[^>]*>(.*?)</a>""",
+            RegexOption.DOT_MATCHES_ALL
+        )
         val matches = linkPattern.findAll(html)
 
         for (match in matches) {
@@ -419,7 +443,6 @@ object WebSearchEngine {
                 .replace("&nbsp;", " ")
                 .trim()
 
-            // تصفية الروابط غير المرغوبة
             val skipDomains = listOf(
                 "google.com", "bing.com", "yandex.com",
                 "facebook.com", "twitter.com", "instagram.com",
@@ -438,7 +461,6 @@ object WebSearchEngine {
             if (!shouldSkip && rawTitle.isNotBlank()) {
                 seen.add(url)
 
-                // البحث عن مقتطف قريب من الرابط
                 val snippet = extractNearbyText(html, url)
 
                 results.add(
@@ -457,21 +479,20 @@ object WebSearchEngine {
         return results
     }
 
-    // ═══ استخراج نص قريب من الرابط ═══
     private fun extractNearbyText(html: String, url: String): String {
         return try {
             val idx = html.indexOf(url)
             if (idx < 0) return ""
 
-            // البحث عن نص بعد الرابط
-            val after = html.substring(minOf(idx + url.length, html.length), minOf(idx + url.length + 500, html.length))
+            val afterEnd = minOf(idx + url.length + 500, html.length)
+            val after = html.substring(minOf(idx + url.length, html.length), afterEnd)
             val textAfter = after.replace(Regex("<[^>]+>"), " ").replace("\\s+".toRegex(), " ").trim()
 
             if (textAfter.length > 20) {
                 textAfter.take(300)
             } else {
-                // البحث عن نص قبل الرابط
-                val before = html.substring(maxOf(0, idx - 500), idx)
+                val beforeStart = maxOf(0, idx - 500)
+                val before = html.substring(beforeStart, idx)
                 val textBefore = before.replace(Regex("<[^>]+>"), " ").replace("\\s+".toRegex(), " ").trim()
                 textBefore.takeLast(300)
             }
@@ -480,21 +501,30 @@ object WebSearchEngine {
         }
     }
 
-    // ═══ بحث شامل مع محركات مخصصة ═══
+    // ═══════════════════════════════════════════
+    //  بحث شامل مع محركات مخصصة
+    // ═══════════════════════════════════════════
+
     suspend fun searchWithCustom(
         query: String,
         engine: SearchEngine,
-        customEngines: List<CustomSearchEngine> = emptyList()
+        customEngineList: List<CustomSearchEngine> = emptyList()
     ): List<SearchResult> {
         return when (engine) {
             SearchEngine.MULTI -> {
-                // البحث الشامل يشمل المحركات المخصصة أيضاً
                 val standardResults = searchMulti(query)
-                val customResults = customEngines.map { ce ->
-                    kotlinx.coroutines.async(Dispatchers.IO) {
-                        try { searchCustom(query, ce) } catch (_: Exception) { emptyList() }
+
+                val customResults = if (customEngineList.isNotEmpty()) {
+                    coroutineScope {
+                        customEngineList.map { ce ->
+                            async(Dispatchers.IO) {
+                                try { searchCustom(query, ce) } catch (_: Exception) { emptyList() }
+                            }
+                        }.awaitAll().flatten()
                     }
-                }.awaitAll().flatten()
+                } else {
+                    emptyList()
+                }
 
                 val all = standardResults + customResults
                 val seen = mutableSetOf<String>()
