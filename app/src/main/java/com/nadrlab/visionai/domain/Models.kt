@@ -23,6 +23,19 @@ enum class ConfidenceLevel(val label: String, val icon: String) {
     LOW("محتمل", "🟠"),
     UNCERTAIN("غير مؤكد", "🔴")
 }
+enum class SearchEngine(
+    val label: String,
+    val labelAr: String,
+    val icon: String,
+    val description: String
+) {
+    SEARXNG("SearXNG", "SearXNG (موصى)", "🌐", "يجمع Google + Bing + DuckDuckGo + أكثر"),
+    DUCKDUCKGO("DuckDuckGo", "DuckDuckGo", "🦆", "بحث خصوصي بدون تتبع"),
+    WIKIPEDIA("Wikipedia", "ويكيبيديا", "📚", "موسوعة شاملة"),
+    GOOGLE_LITE("Google Lite", "جوجل خفيف", "🔍", "نتائج جوجل الأساسية"),
+    ARCHIVE("Archive.org", "أرشيف الإنترنت", "📦", "أرشيف الصفحات والمحتوى القديم"),
+    MULTI("Multi", "بحث شامل", "🚀", "يجمع كل المحركات معاً")
+}
 
 data class AnalysisResult(
     val contentType: String = "",
