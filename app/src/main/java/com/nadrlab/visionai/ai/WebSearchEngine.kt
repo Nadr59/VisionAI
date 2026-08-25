@@ -9,15 +9,13 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
-import okhttp3.Request
+import okhttp3. 
 import org.json.JSONArray
 import org.json.JSONObject
 import java.net.URLDecoder
 import java.net.URLEncoder
-import java.util.concurrent.TimeUnit 
+import java.util.concurrent.TimeUnit
 
-import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.RequestBody.Companion.toRequestBody
 object WebSearchEngine {
 
     private val client = OkHttpClient.Builder()
