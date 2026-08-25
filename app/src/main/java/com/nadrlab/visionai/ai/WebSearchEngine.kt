@@ -6,12 +6,13 @@ import com.nadrlab.visionai.domain.SearchResult
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
-import okhttp3. 
+import okhttp3.Request
 import org.json.JSONArray
 import org.json.JSONObject
+import java.net.URI
 import java.net.URLDecoder
 import java.net.URLEncoder
 import java.util.concurrent.TimeUnit
