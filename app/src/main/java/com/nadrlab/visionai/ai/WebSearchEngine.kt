@@ -9,10 +9,12 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.withContext
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
-import java.net.URLEncoder
+import java.net.URI
 import java.util.concurrent.TimeUnit
 
 object WebSearchEngine {
@@ -20,10 +22,13 @@ object WebSearchEngine {
     private const val TAG = "WebSearchEngine"
 
     // ══════════════════════════════════════════════════════
-    //  🔑 Brave Search API Key
+    //  🔑 Serper.dev API Key
+    //  سجّل مجاناً على https://serper.dev → 2,500 طلب مجاني
     // ══════════════════════════════════════════════════════
-    private const val BRAVE_API_KEY = "BSA_YOUR_KEY_HERE"   // ← ضع مفتاحك هنا
-    private const val BRAVE_BASE_URL = "https://api.search.brave.com/res/v1/web/search"
+    private const val SERPER_API_KEY  = "d30d311608cc2fd59897d1d9920b4433fed55de9"   // ← ضع مفتاحك هنا
+    private const val SERPER_BASE_URL = "https://google.serper.dev/search"
+
+    private val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
 
     private val client = OkHttpClient.Builder()
         .connectTimeout(12, TimeUnit.SECONDS)
@@ -33,28 +38,29 @@ object WebSearchEngine {
         .build()
 
     // ════════════════════════════════════════════════════
-    //  HTTP Helper
+    //  HTTP Helper — POST
     // ════════════════════════════════════════════════════
 
-    private fun httpGet(url: String): String? {
+    private fun httpPost(url: String, jsonBody: String): String? {
         return try {
+            val body = jsonBody.toRequestBody(JSON_MEDIA_TYPE)
             val req = Request.Builder()
                 .url(url)
-                .addHeader("Accept", "application/json")
-                .addHeader("Accept-Encoding", "identity")
-                .addHeader("X-Subscription-Token", BRAVE_API_KEY)
+                .post(body)
+                .addHeader("X-API-KEY", SERPER_API_KEY)
+                .addHeader("Content-Type", "application/json")
                 .build()
 
             client.newCall(req).execute().use { response ->
-                val body = response.body?.string()
-                Log.d(TAG, "GET ${url.take(80)} → ${response.code}, len=${body?.length ?: 0}")
-                if (response.isSuccessful) body else {
+                val responseBody = response.body?.string()
+                Log.d(TAG, "POST ${url.take(80)} → ${response.code}, len=${responseBody?.length ?: 0}")
+                if (response.isSuccessful) responseBody else {
                     Log.w(TAG, "HTTP ${response.code} → ${url.take(60)}")
                     null
                 }
             }
         } catch (e: Exception) {
-            Log.w(TAG, "httpGet FAILED: ${e.javaClass.simpleName}: ${e.message}")
+            Log.w(TAG, "httpPost FAILED: ${e.javaClass.simpleName}: ${e.message}")
             null
         }
     }
@@ -71,105 +77,161 @@ object WebSearchEngine {
         val q = query.trim()
         Log.i(TAG, "search() → '$q'  engine=$engine")
         return withContext(Dispatchers.IO) {
-            searchBrave(q)
+            searchSerper(q)
         }
     }
 
     // ════════════════════════════════════════════════════
-    //  ★ Brave Search API — المحرك الوحيد
-    //  يُعيد مواقع ويب حقيقية — 2,000 طلب/شهر مجاناً
-    //  endpoint: GET https://api.search.brave.com/res/v1/web/search
+    //  ★ Serper.dev — المحرك الوحيد
+    //  نتائج Google حقيقية — 2,500 طلب مجاني بدون بطاقة
+    //  endpoint: POST https://google.serper.dev/search
     // ════════════════════════════════════════════════════
 
-    fun searchBrave(query: String, count: Int = 10): List<SearchResult> {
+    fun searchSerper(query: String, count: Int = 10): List<SearchResult> {
         return runCatching {
-            val encoded = URLEncoder.encode(query, "UTF-8")
-            val url = "$BRAVE_BASE_URL" +
-                      "?q=$encoded" +
-                      "&count=$count" +
-                      "&search_lang=ar" +
-                      "&safesearch=moderate" +
-                      "&extra_snippets=1"
+            // بناء جسم الطلب JSON
+            val requestJson = JSONObject().apply {
+                put("q", query)
+                put("num", count.coerceIn(1, 10))   // الحد الأقصى 10 لكل طلب
+                put("hl", "ar")                      // لغة الواجهة عربي
+                put("gl", "us")                      // منطقة البحث
+            }.toString()
 
-            val body = httpGet(url) ?: return@runCatching emptyList()
-            if (!body.startsWith("{")) return@runCatching emptyList()
-
-            val json = JSONObject(body)
-            val webResults = json
-                .optJSONObject("web")
-                ?.optJSONArray("results")
+            val body = httpPost(SERPER_BASE_URL, requestJson)
                 ?: return@runCatching emptyList()
 
-            val out = mutableListOf<SearchResult>()
+            if (!body.startsWith("{")) return@runCatching emptyList()
 
-            for (i in 0 until webResults.length()) {
-                val item = webResults.optJSONObject(i) ?: continue
+            val json    = JSONObject(body)
+            val results = mutableListOf<SearchResult>()
 
-                val title       = item.optString("title", "").trim()
-                val pageUrl     = item.optString("url", "").trim()
-                val description = item.optString("description", "").trim()
-                val age         = item.optString("age", "")
+            // ── 1) Answer Box — الإجابة المباشرة من Google ──
+            val answerBox = json.optJSONObject("answerBox")
+            if (answerBox != null) {
+                val title   = answerBox.optString("title", "").trim()
+                val answer  = answerBox.optString("answer", "")
+                    .ifBlank { answerBox.optString("snippet", "") }.trim()
+                val link    = answerBox.optString("link", "").trim()
+                if (answer.isNotBlank()) {
+                    results.add(SearchResult(
+                        title   = title.ifBlank { query },
+                        url     = link.ifBlank { "https://www.google.com/search?q=${query}" },
+                        snippet = answer.take(400),
+                        source  = "Google · Answer Box"
+                    ))
+                }
+            }
 
-                // extra_snippets — مقاطع إضافية إن وُجدت
-                val extraArr = item.optJSONArray("extra_snippets")
-                val extra = if (extraArr != null && extraArr.length() > 0)
-                    (0 until minOf(extraArr.length(), 2))
-                        .joinToString(" … ") { extraArr.optString(it, "") }
-                else ""
+            // ── 2) Knowledge Graph — معلومات المعرفة ──
+            val kg = json.optJSONObject("knowledgeGraph")
+            if (kg != null) {
+                val kgTitle       = kg.optString("title", "").trim()
+                val kgDescription = kg.optString("description", "").trim()
+                val kgUrl         = kg.optString("descriptionLink", "").trim()
+                val kgType        = kg.optString("type", "").trim()
+                if (kgTitle.isNotBlank() && kgDescription.isNotBlank()) {
+                    results.add(SearchResult(
+                        title   = kgTitle,
+                        url     = kgUrl.ifBlank { "https://www.google.com/search?q=${query}" },
+                        snippet = kgDescription.take(400),
+                        source  = "Google · Knowledge Graph" + if (kgType.isNotBlank()) " · $kgType" else ""
+                    ))
+                }
+            }
 
-                val snippet = when {
-                    description.isNotBlank() && extra.isNotBlank() ->
-                        "$description … $extra".take(500)
-                    description.isNotBlank() -> description.take(400)
-                    extra.isNotBlank()       -> extra.take(400)
+            // ── 3) Organic Results — النتائج العضوية الرئيسية ──
+            val organic = json.optJSONArray("organic") ?: run {
+                Log.w(TAG, "Serper: لا توجد نتائج عضوية")
+                return@runCatching results
+            }
+
+            for (i in 0 until organic.length()) {
+                val item    = organic.optJSONObject(i) ?: continue
+                val title   = item.optString("title", "").trim()
+                val link    = item.optString("link", "").trim()
+                val snippet = item.optString("snippet", "").trim()
+                val date    = item.optString("date", "").trim()
+                val pos     = item.optInt("position", i + 1)
+
+                // مقاطع إضافية sitelinks إن وُجدت
+                val sitelinks = item.optJSONArray("sitelinks")
+                val extra = if (sitelinks != null && sitelinks.length() > 0) {
+                    (0 until minOf(sitelinks.length(), 2)).joinToString(" | ") { idx ->
+                        sitelinks.optJSONObject(idx)?.optString("title", "") ?: ""
+                    }.trim()
+                } else ""
+
+                val fullSnippet = when {
+                    snippet.isNotBlank() && extra.isNotBlank() -> "$snippet | $extra".take(500)
+                    snippet.isNotBlank() -> snippet.take(400)
+                    extra.isNotBlank()   -> extra.take(400)
                     else -> ""
                 }
 
-                // اسم النطاق كمصدر
-                val domain = extractDomain(pageUrl)
-                val source = if (age.isNotBlank()) "Brave · $domain · $age"
-                             else "Brave · $domain"
+                val domain = extractDomain(link)
+                val source = buildString {
+                    append("Google #$pos · $domain")
+                    if (date.isNotBlank()) append(" · $date")
+                }
 
-                if (title.isNotBlank() && pageUrl.isNotBlank()) {
-                    out.add(SearchResult(
+                if (title.isNotBlank() && link.isNotBlank()) {
+                    results.add(SearchResult(
                         title   = title,
-                        url     = pageUrl,
-                        snippet = snippet,
+                        url     = link,
+                        snippet = fullSnippet,
                         source  = source
                     ))
                 }
             }
 
-            Log.i(TAG, "Brave Search → ${out.size} results")
-            out
+            // ── 4) People Also Ask — أسئلة ذات صلة ──
+            val paa = json.optJSONArray("peopleAlsoAsk")
+            if (paa != null) {
+                for (i in 0 until minOf(paa.length(), 3)) {
+                    val item     = paa.optJSONObject(i) ?: continue
+                    val question = item.optString("question", "").trim()
+                    val answer   = item.optString("snippet", "").trim()
+                    val link     = item.optString("link", "").trim()
+                    if (question.isNotBlank() && answer.isNotBlank()) {
+                        results.add(SearchResult(
+                            title   = question,
+                            url     = link.ifBlank { "https://www.google.com/search?q=${question}" },
+                            snippet = answer.take(400),
+                            source  = "Google · People Also Ask"
+                        ))
+                    }
+                }
+            }
+
+            Log.i(TAG, "Serper → ${results.size} results (organic=${organic.length()})")
+            dedupe(results, 20)
+
         }.getOrElse {
-            Log.e(TAG, "Brave Search error: ${it.message}")
+            Log.e(TAG, "Serper Search error: ${it.message}")
             emptyList()
         }
     }
 
-    // دالة قديمة — تحول إلى Brave
-    fun searchWikipedia(query: String): List<SearchResult> = searchBrave(query)
-    fun searchArchive(query: String): List<SearchResult>   = searchBrave(query)
-    fun searchDDGInstant(query: String): List<SearchResult> = searchBrave(query)
+    // ════════════════════════════════════════════════════
+    //  توافق مع الكود القديم — كل الدوال تمر عبر Serper
+    // ════════════════════════════════════════════════════
 
-    // ════════════════════════════════════════════════════
-    //  جلب محتوى مقالة (يُبقي التوافق مع الكود القديم)
-    // ════════════════════════════════════════════════════
+    fun searchWikipedia(query: String): List<SearchResult>  = searchSerper(query)
+    fun searchArchive(query: String): List<SearchResult>    = searchSerper(query)
+    fun searchDDGInstant(query: String): List<SearchResult> = searchSerper(query)
 
     fun fetchWikipediaContent(title: String, lang: String = "ar"): String {
-        // استخدام Brave للبحث عن المحتوى بدلاً من Wikipedia API
-        val results = searchBrave("$title site:wikipedia.org", count = 3)
+        val results = searchSerper("$title site:wikipedia.org", count = 3)
         return results.joinToString("\n\n") { it.snippet }.take(2000)
     }
 
     // ════════════════════════════════════════════════════
-    //  Multi — يمر عبر Brave مباشرة
+    //  Multi — يمر عبر Serper مباشرة
     // ════════════════════════════════════════════════════
 
     private suspend fun searchMulti(query: String): List<SearchResult> =
         withContext(Dispatchers.IO) {
-            searchBrave(query, count = 20)
+            searchSerper(query, count = 10)
         }
 
     // ════════════════════════════════════════════════════
@@ -182,7 +244,7 @@ object WebSearchEngine {
     ): List<SearchResult> {
         if (query.isBlank()) return emptyList()
         return withContext(Dispatchers.IO) {
-            searchBrave(query)
+            searchSerper(query)
         }
     }
 
@@ -194,7 +256,7 @@ object WebSearchEngine {
         if (query.isBlank()) return emptyList()
         return supervisorScope {
             val standard = async(Dispatchers.IO) {
-                runCatching { searchBrave(query, count = 20) }.getOrDefault(emptyList())
+                runCatching { searchSerper(query, count = 10) }.getOrDefault(emptyList())
             }
             val custom = async(Dispatchers.IO) {
                 customEngineList.map { ce ->
@@ -213,7 +275,7 @@ object WebSearchEngine {
 
     suspend fun searchForAIContext(query: String): String {
         return withContext(Dispatchers.IO) {
-            val results = searchBrave(query, count = 10)
+            val results = searchSerper(query, count = 10)
             if (results.isEmpty()) return@withContext ""
 
             buildString {
@@ -236,8 +298,15 @@ object WebSearchEngine {
     //  أدوات مساعدة
     // ════════════════════════════════════════════════════
 
+    fun generateSearchQueries(keywords: List<String>): List<String> {
+        if (keywords.isEmpty()) return emptyList()
+        val q = mutableListOf(keywords.take(3).joinToString(" "))
+        keywords.take(5).filter { it.length > 3 }.forEach { q.add(it) }
+        return q.distinct().take(6)
+    }
+
     private fun extractDomain(url: String): String = runCatching {
-        java.net.URI(url).host?.removePrefix("www.") ?: url
+        URI(url).host?.removePrefix("www.") ?: url
     }.getOrDefault(url)
 
     private fun dedupe(list: List<SearchResult>, limit: Int): List<SearchResult> {
@@ -246,12 +315,5 @@ object WebSearchEngine {
             val k = r.url.removeSuffix("/")
             if (k in seen) false else { seen.add(k); true }
         }.take(limit)
-    }
-
-    fun generateSearchQueries(keywords: List<String>): List<String> {
-        if (keywords.isEmpty()) return emptyList()
-        val q = mutableListOf(keywords.take(3).joinToString(" "))
-        keywords.take(5).filter { it.length > 3 }.forEach { q.add(it) }
-        return q.distinct().take(6)
     }
 }
