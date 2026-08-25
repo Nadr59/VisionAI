@@ -1,3 +1,5 @@
+   
+
 package com.nadrlab.visionai.ai
 
 import com.nadrlab.visionai.domain.CustomSearchEngine
@@ -6,17 +8,19 @@ import com.nadrlab.visionai.domain.SearchResult
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope          // ← أضف هذا
 import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.withContext
+import okhttp3.MediaType.Companion.toMediaType    // ← أضف هذا
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody // ← أضف هذا
 import org.json.JSONArray
 import org.json.JSONObject
 import java.net.URI
 import java.net.URLDecoder
 import java.net.URLEncoder
 import java.util.concurrent.TimeUnit
-
 object WebSearchEngine {
 
     private val client = OkHttpClient.Builder()
