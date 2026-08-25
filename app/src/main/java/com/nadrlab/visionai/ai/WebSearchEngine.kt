@@ -14,8 +14,10 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.net.URLDecoder
 import java.net.URLEncoder
-import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeUnit 
 
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.RequestBody.Companion.toRequestBody
 object WebSearchEngine {
 
     private val client = OkHttpClient.Builder()
@@ -48,14 +50,13 @@ object WebSearchEngine {
                     SearchEngine.MULTI -> searchMulti(q)
                 }
             } catch (_: Exception) {
-                // احتياطي أخير
                 try { searchWikipedia(q) } catch (_: Exception) { emptyList() }
             }
         }
     }
 
     // ═══════════════════════════════════════════
-    //  1. SearXNG — حالات محدثة تعمل
+    //  1. SearXNG — حالات محدثة
     // ═══════════════════════════════════════════
 
     private val searxngInstances = listOf(
@@ -68,7 +69,9 @@ object WebSearchEngine {
         "https://search.bus-hit.me",
         "https://priv.au",
         "https://search.ononoki.org",
-        "https://searx.tiekoetter.com"
+        "https://searx.tiekoetter.com",
+        "https://search.hbubli.de",
+        "https://search.datura.network"
     )
 
     private fun searchSearXNG(query: String): List<SearchResult> {
@@ -120,14 +123,52 @@ object WebSearchEngine {
     }
 
     // ═══════════════════════════════════════════
-    //  2. DuckDuckGo — Instant Answer API
+    //  2. DuckDuckGo — HTML فقط (الوحيد الموثوق)
     // ═══════════════════════════════════════════
 
     private fun searchDuckDuckGo(query: String): List<SearchResult> {
-        val results = mutableListOf<SearchResult>()
         val encoded = URLEncoder.encode(query, "UTF-8")
 
-        // ═══ Instant Answer API ═══
+        // ═══ الطريقة 1: DuckDuckGo HTML (بحث ويب حقيقي) ═══
+        try {
+            val url = "https://html.duckduckgo.com/html/"
+            val formBody = "q=$encoded".toRequestBody("application/x-www-form-urlencoded".toMediaType())
+            val request = Request.Builder()
+                .url(url)
+                .addHeader("User-Agent", UA)
+                .addHeader("Accept", "text/html")
+                .addHeader("Accept-Language", "ar,en;q=0.9")
+                .post(formBody)
+                .build()
+
+            val response = client.newCall(request).execute()
+            val html = response.body?.string() ?: ""
+
+            if (html.isNotBlank() && html.contains("result__a")) {
+                val results = parseDuckDuckGoHtml(html)
+                if (results.isNotEmpty()) return results
+            }
+        } catch (_: Exception) {}
+
+        // ═══ الطريقة 2: DuckDuckGo GET ═══
+        try {
+            val url = "https://html.duckduckgo.com/html/?q=$encoded"
+            val request = Request.Builder()
+                .url(url)
+                .addHeader("User-Agent", UA)
+                .addHeader("Accept", "text/html")
+                .build()
+
+            val response = client.newCall(request).execute()
+            val html = response.body?.string() ?: ""
+
+            if (html.isNotBlank() && html.contains("result__a")) {
+                val results = parseDuckDuckGoHtml(html)
+                if (results.isNotEmpty()) return results
+            }
+        } catch (_: Exception) {}
+
+        // ═══ الطريقة 3: Instant Answer API (احتياطي) ═══
         try {
             val url = "https://api.duckduckgo.com/?q=$encoded&format=json&no_html=1&skip_disambig=1"
             val request = Request.Builder()
@@ -140,15 +181,14 @@ object WebSearchEngine {
 
             if (body.startsWith("{")) {
                 val json = JSONObject(body)
+                val results = mutableListOf<SearchResult>()
 
-                // Abstract (النتيجة الرئيسية)
                 val abstract = json.optString("Abstract", "")
                 val abstractUrl = json.optString("AbstractURL", "")
-                val abstractSource = json.optString("AbstractSource", "")
                 if (abstract.isNotBlank() && abstractUrl.isNotBlank()) {
                     results.add(
                         SearchResult(
-                            title = abstractSource.ifBlank { "DuckDuckGo" },
+                            title = json.optString("AbstractSource", "DuckDuckGo"),
                             url = abstractUrl,
                             snippet = abstract.take(400),
                             source = extractDomain(abstractUrl)
@@ -156,22 +196,6 @@ object WebSearchEngine {
                     )
                 }
 
-                // Definition
-                val definition = json.optString("Definition", "")
-                val definitionUrl = json.optString("DefinitionURL", "")
-                val definitionSource = json.optString("DefinitionSource", "")
-                if (definition.isNotBlank() && definitionUrl.isNotBlank()) {
-                    results.add(
-                        SearchResult(
-                            title = definitionSource.ifBlank { "تعريف" },
-                            url = definitionUrl,
-                            snippet = definition.take(400),
-                            source = extractDomain(definitionUrl)
-                        )
-                    )
-                }
-
-                // RelatedTopics
                 val topics = json.optJSONArray("RelatedTopics") ?: JSONArray()
                 for (i in 0 until minOf(topics.length(), 10)) {
                     val t = topics.optJSONObject(i) ?: continue
@@ -189,53 +213,29 @@ object WebSearchEngine {
                     }
                 }
 
-                // Results (أحياناً يكون موجود)
-                val resultsArr = json.optJSONArray("Results") ?: JSONArray()
-                for (i in 0 until minOf(resultsArr.length(), 5)) {
-                    val r = resultsArr.optJSONObject(i) ?: continue
-                    val text = r.optString("Text", "")
-                    val firstUrl = r.optString("FirstURL", "")
-                    if (text.isNotBlank() && firstUrl.isNotBlank()) {
-                        results.add(
-                            SearchResult(
-                                title = text.take(100),
-                                url = firstUrl,
-                                snippet = text.take(400),
-                                source = extractDomain(firstUrl)
-                            )
-                        )
-                    }
-                }
+                if (results.isNotEmpty()) return results
             }
         } catch (_: Exception) {}
 
-        // ═══ DuckDuckGo HTML — احتياطي ═══
-        if (results.isEmpty()) {
-            try {
-                val url = "https://html.duckduckgo.com/html/?q=$encoded"
-                val request = Request.Builder()
-                    .url(url)
-                    .addHeader("User-Agent", UA)
-                    .build()
-
-                val response = client.newCall(request).execute()
-                val html = response.body?.string() ?: ""
-
-                if (html.isNotBlank() && html.contains("result__a")) {
-                    results.addAll(parseDuckDuckGoHtml(html))
-                }
-            } catch (_: Exception) {}
-        }
-
-        return results
+        return emptyList()
     }
 
     private fun parseDuckDuckGoHtml(html: String): List<SearchResult> {
         val results = mutableListOf<SearchResult>()
+
+        // البحث عن كل result block
+        val resultBlockPattern = Regex(
+            """<div[^>]*class="[^"]*result[^"]*web-result[^"]*"[^>]*>(.*?)</div>\s*</div>""",
+            RegexOption.DOT_MATCHES_ALL
+        )
+
+        // نمط العنوان
         val titlePattern = Regex(
             """<a[^>]*class="result__a"[^>]*href="([^"]*)"[^>]*>(.*?)</a>""",
             RegexOption.DOT_MATCHES_ALL
         )
+
+        // نمط المقتطف
         val snippetPattern = Regex(
             """<a[^>]*class="result__snippet"[^>]*>(.*?)</a>""",
             RegexOption.DOT_MATCHES_ALL
@@ -244,21 +244,11 @@ object WebSearchEngine {
         val titles = titlePattern.findAll(html).toList()
         val snippets = snippetPattern.findAll(html).toList()
 
-        for (i in titles.indices.take(10)) {
+        for (i in titles.indices.take(15)) {
             val rawUrl = titles[i].groupValues[1]
-            val title = titles[i].groupValues[2]
-                .replace(Regex("<[^>]+>"), "")
-                .replace("&amp;", "&")
-                .replace("&quot;", "\"")
-                .replace("&#39;", "'")
-                .trim()
+            val title = cleanHtml(titles[i].groupValues[2])
             val cleanUrl = extractDDGUrl(rawUrl)
-            val snippet = if (i < snippets.size) {
-                snippets[i].groupValues[1]
-                    .replace(Regex("<[^>]+>"), "")
-                    .replace("&amp;", "&")
-                    .trim()
-            } else ""
+            val snippet = if (i < snippets.size) cleanHtml(snippets[i].groupValues[1]) else ""
 
             if (title.isNotBlank() && cleanUrl.isNotBlank() && cleanUrl.startsWith("http")) {
                 results.add(
@@ -271,7 +261,22 @@ object WebSearchEngine {
                 )
             }
         }
+
         return results
+    }
+
+    private fun cleanHtml(text: String): String {
+        return text
+            .replace(Regex("<[^>]+>"), "")
+            .replace("&amp;", "&")
+            .replace("&quot;", "\"")
+            .replace("&#39;", "'")
+            .replace("&#x27;", "'")
+            .replace("&lt;", "<")
+            .replace("&gt;", ">")
+            .replace("&#x2F;", "/")
+            .replace("&nbsp;", " ")
+            .trim()
     }
 
     private fun extractDDGUrl(raw: String): String {
@@ -301,7 +306,7 @@ object WebSearchEngine {
             val url = "https://ar.wikipedia.org/w/api.php?action=query&list=search&srsearch=$encoded&format=json&srlimit=5&utf8=1"
             val request = Request.Builder()
                 .url(url)
-                .addHeader("User-Agent", "VisionAI/2.0 (Android; contact: visionai@example.com)")
+                .addHeader("User-Agent", "VisionAI/2.0 (Android; contact@example.com)")
                 .build()
 
             val response = client.newCall(request).execute()
@@ -315,19 +320,11 @@ object WebSearchEngine {
                 for (i in 0 until searchArr.length()) {
                     val item = searchArr.getJSONObject(i)
                     val title = item.optString("title", "")
-                    val snippet = item.optString("snippet", "")
-                        .replace(Regex("<[^>]+>"), "").trim()
+                    val snippet = item.optString("snippet", "").replace(Regex("<[^>]+>"), "").trim()
                     val pageUrl = "https://ar.wikipedia.org/wiki/${URLEncoder.encode(title, "UTF-8").replace("+", "_")}"
 
                     if (title.isNotBlank()) {
-                        results.add(
-                            SearchResult(
-                                title = title,
-                                url = pageUrl,
-                                snippet = snippet.take(400),
-                                source = "ويكيبيديا عربي"
-                            )
-                        )
+                        results.add(SearchResult(title, pageUrl, snippet.take(400), "ويكيبيديا عربي"))
                     }
                 }
             }
@@ -338,7 +335,7 @@ object WebSearchEngine {
             val url = "https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=$encoded&format=json&srlimit=5&utf8=1"
             val request = Request.Builder()
                 .url(url)
-                .addHeader("User-Agent", "VisionAI/2.0 (Android; contact: visionai@example.com)")
+                .addHeader("User-Agent", "VisionAI/2.0 (Android; contact@example.com)")
                 .build()
 
             val response = client.newCall(request).execute()
@@ -352,19 +349,11 @@ object WebSearchEngine {
                 for (i in 0 until searchArr.length()) {
                     val item = searchArr.getJSONObject(i)
                     val title = item.optString("title", "")
-                    val snippet = item.optString("snippet", "")
-                        .replace(Regex("<[^>]+>"), "").trim()
+                    val snippet = item.optString("snippet", "").replace(Regex("<[^>]+>"), "").trim()
                     val pageUrl = "https://en.wikipedia.org/wiki/${URLEncoder.encode(title, "UTF-8").replace("+", "_")}"
 
                     if (title.isNotBlank()) {
-                        results.add(
-                            SearchResult(
-                                title = title,
-                                url = pageUrl,
-                                snippet = snippet.take(400),
-                                source = "ويكيبيديا EN"
-                            )
-                        )
+                        results.add(SearchResult(title, pageUrl, snippet.take(400), "ويكيبيديا EN"))
                     }
                 }
             }
@@ -398,19 +387,14 @@ object WebSearchEngine {
         val results = mutableListOf<SearchResult>()
         val seen = mutableSetOf<String>()
 
-        // نمط 1: روابط /url?q=
         val linkPattern = Regex(
             """<a[^>]*href="/url\?q=([^&"]+)[^"]*"[^>]*>(.*?)</a>""",
             RegexOption.DOT_MATCHES_ALL
         )
+
         for (match in linkPattern.findAll(html).take(10)) {
             val rawUrl = match.groupValues[1]
-            val title = match.groupValues[2]
-                .replace(Regex("<[^>]+>"), "")
-                .replace("&amp;", "&")
-                .replace("&#39;", "'")
-                .trim()
-
+            val title = cleanHtml(match.groupValues[2])
             val cleanUrl = try { URLDecoder.decode(rawUrl, "UTF-8") } catch (_: Exception) { rawUrl }
 
             if (title.isNotBlank() && cleanUrl.startsWith("http") &&
@@ -420,27 +404,11 @@ object WebSearchEngine {
             }
         }
 
-        // نمط 2: احتياطي
-        if (results.isEmpty()) {
-            val altPattern = Regex(
-                """href="(https?://(?!google|gstatic|googleapis)[^"]+)"[^>]*>([^<]{10,})</a>""",
-                RegexOption.DOT_MATCHES_ALL
-            )
-            for (match in altPattern.findAll(html).take(15)) {
-                val url = match.groupValues[1]
-                val title = match.groupValues[2].trim()
-                if (url !in seen && title.length > 10 && !url.contains("google.com")) {
-                    seen.add(url)
-                    results.add(SearchResult(title.take(150), url, "", extractDomain(url)))
-                }
-            }
-        }
-
         return results
     }
 
     // ═══════════════════════════════════════════
-    //  5. Archive.org — Advanced Search API
+    //  5. Archive.org
     // ═══════════════════════════════════════════
 
     private fun searchArchive(query: String): List<SearchResult> {
@@ -489,41 +457,30 @@ object WebSearchEngine {
     }
 
     // ═══════════════════════════════════════════
-    //  6. بحث شامل — كل المحركات بالتوازي
+    //  6. بحث شامل
     // ═══════════════════════════════════════════
 
     private suspend fun searchMulti(query: String): List<SearchResult> {
         return coroutineScope {
             val deferreds = listOf(
-                async(Dispatchers.IO) {
-                    try { searchSearXNG(query) } catch (_: Exception) { emptyList() }
-                },
-                async(Dispatchers.IO) {
-                    try { searchDuckDuckGo(query) } catch (_: Exception) { emptyList() }
-                },
-                async(Dispatchers.IO) {
-                    try { searchWikipedia(query) } catch (_: Exception) { emptyList() }
-                },
-                async(Dispatchers.IO) {
-                    try { searchGoogleLite(query) } catch (_: Exception) { emptyList() }
-                },
-                async(Dispatchers.IO) {
-                    try { searchArchive(query) } catch (_: Exception) { emptyList() }
-                }
+                async(Dispatchers.IO) { try { searchSearXNG(query) } catch (_: Exception) { emptyList() } },
+                async(Dispatchers.IO) { try { searchDuckDuckGo(query) } catch (_: Exception) { emptyList() } },
+                async(Dispatchers.IO) { try { searchWikipedia(query) } catch (_: Exception) { emptyList() } },
+                async(Dispatchers.IO) { try { searchGoogleLite(query) } catch (_: Exception) { emptyList() } },
+                async(Dispatchers.IO) { try { searchArchive(query) } catch (_: Exception) { emptyList() } }
             )
 
             val allResults = deferreds.awaitAll().flatten()
-
             val seen = mutableSetOf<String>()
-            allResults.filter { result ->
-                val key = result.url.removeSuffix("/")
+            allResults.filter { r ->
+                val key = r.url.removeSuffix("/")
                 if (key in seen) false else { seen.add(key); true }
             }.take(25)
         }
     }
 
     // ═══════════════════════════════════════════
-    //  محرك مخصص
+    //  محرك مخصص — مُصحح
     // ═══════════════════════════════════════════
 
     suspend fun searchCustom(
@@ -541,17 +498,29 @@ object WebSearchEngine {
                     .url(searchUrl)
                     .addHeader("User-Agent", UA)
                     .addHeader("Accept-Language", "ar,en;q=0.9")
-                    .addHeader("Accept", "text/html")
+                    .addHeader("Accept", "text/html,application/xhtml+xml")
                     .build()
 
                 val response = client.newCall(request).execute()
                 val html = response.body?.string() ?: ""
+                val code = response.code
 
-                if (html.isBlank()) return@withContext emptyList()
+                if (html.isBlank() || code != 200) {
+                    return@withContext emptyList<SearchResult>()
+                }
 
-                parseGenericHtml(html, engine.nameAr.ifBlank { engine.name })
+                // تحليل HTML
+                val results = parseGenericHtml(html, engine.nameAr.ifBlank { engine.name })
+
+                // إذا لم نجد نتائج، جرب البحث في DuckDuckGo بدل ذلك
+                if (results.isEmpty()) {
+                    return@withContext searchDuckDuckGo(query)
+                }
+
+                results
             } catch (_: Exception) {
-                emptyList()
+                // في حالة الخطأ، جرب DuckDuckGo
+                try { searchDuckDuckGo(query) } catch (_: Exception) { emptyList() }
             }
         }
     }
@@ -577,15 +546,7 @@ object WebSearchEngine {
 
         for (match in linkPattern.findAll(html)) {
             val url = match.groupValues[1]
-            val rawTitle = match.groupValues[2]
-                .replace(Regex("<[^>]+>"), "")
-                .replace("&amp;", "&")
-                .replace("&quot;", "\"")
-                .replace("&#39;", "'")
-                .replace("&lt;", "<")
-                .replace("&gt;", ">")
-                .replace("&nbsp;", " ")
-                .trim()
+            val rawTitle = cleanHtml(match.groupValues[2])
 
             val shouldSkip = skipDomains.any { url.contains(it, ignoreCase = true) } ||
                     rawTitle.length < 5 ||
