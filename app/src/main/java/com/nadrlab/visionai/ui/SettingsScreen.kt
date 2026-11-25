@@ -1,6 +1,8 @@
 package com.nadrlab.visionai.ui
 
 import androidx.compose.animation.AnimatedVisibility
+import android.content.Intent
+import android.provider.Settings
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -13,6 +15,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -25,6 +28,7 @@ import com.nadrlab.visionai.vm.MainViewModel
 
 @Composable
 fun SettingsScreen(viewModel: MainViewModel) {
+    val context = LocalContext.current
     val settings = viewModel.settings
     val customEngines by viewModel.customEngines.collectAsState()
 
@@ -184,6 +188,28 @@ fun SettingsScreen(viewModel: MainViewModel) {
             }
             SettingsSwitch("حفظ سجل التحليلات", saveHistory) {
                 saveHistory = it; settings.saveHistory = it
+            }
+        }
+
+        // ═══ مترجم الشاشة ═══
+        SettingsCard("مترجم الشاشة التجريبي") {
+            Text(
+                "فعّل الخدمة لإظهار زر عائم وقراءة النصوص المتاحة في التطبيقات. هذه المرحلة للاختبار فقط؛ لا توجد ترجمة أو إرسال للبيانات بعد.",
+                color = Color(0xFFBBBBBB),
+                fontSize = 12.sp
+            )
+            Spacer(Modifier.height(10.dp))
+            Button(
+                onClick = {
+                    context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                },
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(10.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0284C7))
+            ) {
+                Icon(Icons.Default.Accessibility, null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("فتح إعدادات إمكانية الوصول")
             }
         }
 
