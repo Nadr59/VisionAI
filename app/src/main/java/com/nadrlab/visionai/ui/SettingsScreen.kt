@@ -194,8 +194,14 @@ fun SettingsScreen(viewModel: MainViewModel) {
         // ═══ مترجم الشاشة ═══
         SettingsCard("مترجم الشاشة التجريبي") {
             Text(
-                "فعّل الخدمة لإظهار زر عائم وقراءة النصوص المتاحة في التطبيقات. هذه المرحلة للاختبار فقط؛ لا توجد ترجمة أو إرسال للبيانات بعد.",
+                "شغّل خدمة VisionAI لإظهار الزر العائم وقراءة النصوص المتاحة في التطبيقات. لا توجد ترجمة أو عملية إرسال للبيانات في هذه المرحلة.",
                 color = Color(0xFFBBBBBB),
+                fontSize = 12.sp
+            )
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "إذا اختفى الزر أو توقفت الخدمة: افتح إعدادات إمكانية الوصول، اختر VisionAI، أوقف الخدمة ثم فعّلها مجدداً.",
+                color = Color(0xFFFFC107),
                 fontSize = 12.sp
             )
             Spacer(Modifier.height(10.dp))
@@ -209,7 +215,7 @@ fun SettingsScreen(viewModel: MainViewModel) {
             ) {
                 Icon(Icons.Default.Accessibility, null, modifier = Modifier.size(18.dp))
                 Spacer(Modifier.width(8.dp))
-                Text("فتح إعدادات إمكانية الوصول")
+                Text("إظهار / إعادة تشغيل الزر العائم")
             }
         }
 
