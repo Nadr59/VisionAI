@@ -44,6 +44,20 @@
             </intent-filter>
         </activity>
 
+        <!-- خدمة قراءة النصوص وإظهار زر الترجمة العائم -->
+        <service
+            android:name=".service.ScreenReaderService"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
+            android:exported="true"
+            android:label="مترجم الشاشة">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/screen_reader_service" />
+        </service>
+
         <!-- FileProvider للكاميرا -->
         <provider
             android:name="androidx.core.content.FileProvider"
