@@ -3,26 +3,29 @@ package com.nadrlab.visionai.service
 import android.accessibilityservice.AccessibilityService
 import android.graphics.PixelFormat
 import android.graphics.drawable.GradientDrawable
+import android.os.SystemClock
 import android.view.Gravity
 import android.view.MotionEvent
-import android.view.View
 import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import android.widget.TextView
 import android.widget.Toast
+import java.util.ArrayDeque
 import kotlin.math.abs
 
 /**
- * المرحلة الأولى: يقرأ النصوص المتاحة في شجرة إمكانية الوصول ويعرض زرّاً عائماً.
- * لا يلتقط الشاشة ولا يرسل أي نص إلى الإنترنت في هذه المرحلة.
+ * قارئ شاشة تجريبي محدود الحمل:
+ * - يقرأ النصوص المتاحة في شجرة إمكانية الوصول فقط.
+ * - لا يلتقط صورة الشاشة ولا يرسل أي بيانات إلى الإنترنت.
+ * - يحدّ عدد العناصر ومعدل الفحص لتجنب تجميد واجهة الهاتف.
  */
 class ScreenReaderService : AccessibilityService() {
 
     private var windowManager: WindowManager? = null
     private var floatingButton: TextView? = null
     private var lastDetectedText: String = ""
-    private var layoutParams: WindowManager.LayoutParams? = null
+    private var lastScanTime = 0L
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -31,33 +34,71 @@ class ScreenReaderService : AccessibilityService() {
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        if (event == null || event.packageName?.toString() == packageName) return
-        val root = rootInActiveWindow ?: return
-        val collected = StringBuilder()
-        collectVisibleText(root, collected)
-        lastDetectedText = collected.toString().trim().take(MAX_CAPTURE_LENGTH)
-    }
+        if (event == null) return
+        if (event.packageName?.toString() == packageName) return
 
-    private fun collectVisibleText(node: AccessibilityNodeInfo?, output: StringBuilder) {
-        if (node == null || output.length >= MAX_CAPTURE_LENGTH) return
-        val text = node.text?.toString()?.trim().orEmpty()
-        val description = node.contentDescription?.toString()?.trim().orEmpty()
-        if (text.isNotEmpty()) appendUnique(output, text)
-        if (description.isNotEmpty()) appendUnique(output, description)
-        for (index in 0 until node.childCount) {
-            if (output.length >= MAX_CAPTURE_LENGTH) break
-            collectVisibleText(node.getChild(index), output)
+        // لا نفحص الشجرة مع كل حدث؛ بعض التطبيقات ترسل أحداثاً كثيرة جداً.
+        val relevantEvent = when (event.eventType) {
+            AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED,
+            AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED,
+            AccessibilityEvent.TYPE_VIEW_SCROLLED -> true
+            else -> false
+        }
+        if (!relevantEvent) return
+
+        val now = SystemClock.uptimeMillis()
+        if (now - lastScanTime < MIN_SCAN_INTERVAL_MS) return
+        lastScanTime = now
+
+        // إعادة إنشاء الزر إن فُقد لأي سبب بينما الخدمة ما زالت تعمل.
+        if (floatingButton == null) showFloatingButton()
+
+        try {
+            val root = rootInActiveWindow ?: return
+            lastDetectedText = collectVisibleText(root).take(MAX_CAPTURE_LENGTH)
+        } catch (_: Exception) {
+            // بعض التطبيقات تمنع الوصول إلى شجرة المحتوى أو تغيّرها أثناء القراءة.
         }
     }
 
-    private fun appendUnique(output: StringBuilder, value: String) {
+    private fun collectVisibleText(root: AccessibilityNodeInfo): String {
+        val output = StringBuilder()
+        val queue = ArrayDeque<Pair<AccessibilityNodeInfo, Int>>()
+        queue.add(root to 0)
+        var visited = 0
+
+        while (queue.isNotEmpty() && visited < MAX_NODES && output.length < MAX_CAPTURE_LENGTH) {
+            val (node, depth) = queue.removeFirst()
+            visited++
+            try {
+                appendUnique(output, node.text?.toString().orEmpty())
+                appendUnique(output, node.contentDescription?.toString().orEmpty())
+                if (depth < MAX_DEPTH) {
+                    val childCount = minOf(node.childCount, MAX_CHILDREN_PER_NODE)
+                    for (index in 0 until childCount) {
+                        val child = try { node.getChild(index) } catch (_: Exception) { null }
+                        if (child != null) queue.add(child to (depth + 1))
+                    }
+                }
+            } catch (_: Exception) {
+                // تجاهل العنصر الذي تعذرت قراءته ومتابعة بقية العناصر.
+            }
+        }
+        return output.toString().trim()
+    }
+
+    private fun appendUnique(output: StringBuilder, rawValue: String) {
+        val value = rawValue.trim().take(MAX_SINGLE_TEXT_LENGTH)
         if (value.isBlank() || output.contains(value)) return
         if (output.isNotEmpty()) output.append('\n')
-        output.append(value)
+        val remaining = MAX_CAPTURE_LENGTH - output.length
+        if (remaining > 0) output.append(value.take(remaining))
     }
 
     private fun showFloatingButton() {
         if (floatingButton != null) return
+        val wm = windowManager ?: return
+
         val button = TextView(this).apply {
             text = "تر"
             textSize = 16f
@@ -104,11 +145,12 @@ class ScreenReaderService : AccessibilityService() {
                 MotionEvent.ACTION_MOVE -> {
                     val dx = (startX - event.rawX).toInt()
                     val dy = (event.rawY - startY).toInt()
-                    if (abs(dx) > dp(5) || abs(dy) > dp(5)) moved = true
+                    if (abs(dx) > dp(6) || abs(dy) > dp(6)) moved = true
                     if (moved) {
                         params.x = (initialX + dx).coerceAtLeast(0)
-                        params.y = initialY + dy
-                        windowManager?.updateViewLayout(view, params)
+                        val maxY = (resources.displayMetrics.heightPixels - dp(60)).coerceAtLeast(0)
+                        params.y = (initialY + dy).coerceIn(0, maxY)
+                        try { wm.updateViewLayout(view, params) } catch (_: Exception) { }
                     }
                     true
                 }
@@ -120,19 +162,21 @@ class ScreenReaderService : AccessibilityService() {
                 else -> false
             }
         }
+
         button.setOnClickListener {
-            val message = if (lastDetectedText.isBlank()) {
-                "لم يُكتشف نص بعد. افتح تطبيقاً يحتوي على نصوص ثم اضغط مجدداً."
+            val text = lastDetectedText
+            val message = if (text.isBlank()) {
+                "لم يُكتشف نص متاح. انتقل إلى صفحة تحتوي على نص ثم اضغط مجدداً."
             } else {
-                "تم رصد نصوص من الشاشة:\n" + lastDetectedText.take(350)
+                val lineCount = text.lines().count { it.isNotBlank() }
+                "تم رصد $lineCount مقطعاً نصياً. ستُضاف الترجمة في المرحلة التالية."
             }
-            Toast.makeText(this, message, Toast.LENGTH_LONG).show()
+            Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
         }
 
         try {
-            windowManager?.addView(button, params)
+            wm.addView(button, params)
             floatingButton = button
-            layoutParams = params
         } catch (_: Exception) {
             floatingButton = null
         }
@@ -146,12 +190,18 @@ class ScreenReaderService : AccessibilityService() {
         }
         floatingButton = null
         windowManager = null
+        lastDetectedText = ""
         super.onDestroy()
     }
 
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
 
     companion object {
-        private const val MAX_CAPTURE_LENGTH = 4000
+        private const val MIN_SCAN_INTERVAL_MS = 700L
+        private const val MAX_NODES = 140
+        private const val MAX_DEPTH = 12
+        private const val MAX_CHILDREN_PER_NODE = 30
+        private const val MAX_SINGLE_TEXT_LENGTH = 300
+        private const val MAX_CAPTURE_LENGTH = 1800
     }
 }
