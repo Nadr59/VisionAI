@@ -1,3 +1,4 @@
 <resources>
     <string name="app_name">VisionAI</string>
+    <string name="screen_reader_service_description">قراءة النصوص الظاهرة في التطبيقات لتهيئتها للترجمة. لا يتم إرسال النصوص إلى الإنترنت في هذه المرحلة.</string>
 </resources>
