@@ -3,7 +3,8 @@ package com.nadrlab.visionai.service
 import android.accessibilityservice.AccessibilityService
 import android.graphics.PixelFormat
 import android.graphics.drawable.GradientDrawable
-import android.os.SystemClock
+import android.os.Handler
+import android.os.Looper
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.WindowManager
@@ -15,84 +16,167 @@ import java.util.ArrayDeque
 import kotlin.math.abs
 
 /**
- * قارئ شاشة تجريبي محدود الحمل:
- * - يقرأ النصوص المتاحة في شجرة إمكانية الوصول فقط.
- * - لا يلتقط صورة الشاشة ولا يرسل أي بيانات إلى الإنترنت.
- * - يحدّ عدد العناصر ومعدل الفحص لتجنب تجميد واجهة الهاتف.
+ * قارئ شاشة محدود الحمل:
+ * - يقرأ النصوص المتاحة عبر Accessibility فقط.
+ * - يؤجل الفحص حتى تستقر أحداث الشاشة بدلاً من فحصها مع كل حدث.
+ * - يضع حدوداً صارمة لعدد العناصر وعمق الشجرة.
+ * - لا يلتقط الشاشة ولا يرسل النصوص إلى الإنترنت.
  */
 class ScreenReaderService : AccessibilityService() {
 
     private var windowManager: WindowManager? = null
     private var floatingButton: TextView? = null
     private var lastDetectedText: String = ""
-    private var lastScanTime = 0L
+
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private var scanScheduled = false
+
+    private val scanRunnable = Runnable {
+        scanScheduled = false
+        scanActiveWindow()
+    }
 
     override fun onServiceConnected() {
         super.onServiceConnected()
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
         showFloatingButton()
+        scheduleScan(INITIAL_SCAN_DELAY_MS, reset = true)
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event == null) return
         if (event.packageName?.toString() == packageName) return
 
-        // لا نفحص الشجرة مع كل حدث؛ بعض التطبيقات ترسل أحداثاً كثيرة جداً.
-        val relevantEvent = when (event.eventType) {
-            AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED,
-            AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED,
-            AccessibilityEvent.TYPE_VIEW_SCROLLED -> true
-            else -> false
-        }
-        if (!relevantEvent) return
+        when (event.eventType) {
+            AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> {
+                scheduleScan(WINDOW_CHANGE_DELAY_MS, reset = true)
+            }
 
-        val now = SystemClock.uptimeMillis()
-        if (now - lastScanTime < MIN_SCAN_INTERVAL_MS) return
-        lastScanTime = now
+            AccessibilityEvent.TYPE_VIEW_SCROLLED -> {
+                scheduleScan(SCROLL_DELAY_MS, reset = true)
+            }
 
-        // إعادة إنشاء الزر إن فُقد لأي سبب بينما الخدمة ما زالت تعمل.
-        if (floatingButton == null) showFloatingButton()
+            AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED -> {
+                // لا نعيد ضبط المؤقت مع كل حدث؛ حتى لا يتأخر الفحص إلى ما لا نهاية.
+                scheduleScan(CONTENT_CHANGE_DELAY_MS, reset = false)
+            }
 
-        try {
-            val root = rootInActiveWindow ?: return
-            lastDetectedText = collectVisibleText(root).take(MAX_CAPTURE_LENGTH)
-        } catch (_: Exception) {
-            // بعض التطبيقات تمنع الوصول إلى شجرة المحتوى أو تغيّرها أثناء القراءة.
+            else -> Unit
         }
     }
 
+    /**
+     * جدولة الفحص على الخيط الرئيسي بعد هدوء أحداث الواجهة.
+     * الفحص متزامن ومحدود، ولا توجد مهام متوازية تتراكم.
+     */
+    private fun scheduleScan(delayMs: Long, reset: Boolean) {
+        if (reset) {
+            mainHandler.removeCallbacks(scanRunnable)
+            scanScheduled = false
+        }
+        if (scanScheduled) return
+
+        scanScheduled = true
+        mainHandler.postDelayed(scanRunnable, delayMs)
+    }
+
+    private fun scanActiveWindow() {
+        if (floatingButton == null || floatingButton?.isAttachedToWindow != true) {
+            floatingButton = null
+            showFloatingButton()
+        }
+
+        val root = try {
+            rootInActiveWindow
+        } catch (_: Exception) {
+            null
+        } ?: return
+
+        lastDetectedText = collectVisibleText(root).take(MAX_CAPTURE_LENGTH)
+    }
+
+    /**
+     * قراءة محدودة بطريقة BFS لتجنب التعمق الكبير في شجرة التطبيقات.
+     * يتم تحرير كل AccessibilityNodeInfo بعد الانتهاء منه.
+     */
     private fun collectVisibleText(root: AccessibilityNodeInfo): String {
         val output = StringBuilder()
+        val seen = LinkedHashSet<String>()
         val queue = ArrayDeque<Pair<AccessibilityNodeInfo, Int>>()
         queue.add(root to 0)
+
         var visited = 0
 
-        while (queue.isNotEmpty() && visited < MAX_NODES && output.length < MAX_CAPTURE_LENGTH) {
-            val (node, depth) = queue.removeFirst()
-            visited++
-            try {
-                appendUnique(output, node.text?.toString().orEmpty())
-                appendUnique(output, node.contentDescription?.toString().orEmpty())
-                if (depth < MAX_DEPTH) {
+        try {
+            while (queue.isNotEmpty() &&
+                visited < MAX_NODES &&
+                output.length < MAX_CAPTURE_LENGTH
+            ) {
+                val (node, depth) = queue.removeFirst()
+                visited++
+
+                try {
+                    if (!node.isVisibleToUser) continue
+
+                    if (!node.isPassword) {
+                        appendUnique(output, seen, node.text?.toString().orEmpty())
+                        appendUnique(
+                            output,
+                            seen,
+                            node.contentDescription?.toString().orEmpty()
+                        )
+                    }
+
+                    if (depth >= MAX_DEPTH) continue
+
                     val childCount = minOf(node.childCount, MAX_CHILDREN_PER_NODE)
                     for (index in 0 until childCount) {
-                        val child = try { node.getChild(index) } catch (_: Exception) { null }
-                        if (child != null) queue.add(child to (depth + 1))
+                        val child = try {
+                            node.getChild(index)
+                        } catch (_: Exception) {
+                            null
+                        }
+                        if (child != null) {
+                            queue.add(child to (depth + 1))
+                        }
+                    }
+                } catch (_: Exception) {
+                    // قد تتغير شجرة التطبيق أثناء القراءة؛ نتجاوز العنصر المتعذر.
+                } finally {
+                    try {
+                        node.recycle()
+                    } catch (_: Exception) {
+                        // recycle غير مؤثر في إصدارات Android الحديثة.
                     }
                 }
-            } catch (_: Exception) {
-                // تجاهل العنصر الذي تعذرت قراءته ومتابعة بقية العناصر.
+            }
+        } finally {
+            // تحرير أي عناصر بقيت في الطابور عند بلوغ الحد الأقصى.
+            while (queue.isNotEmpty()) {
+                try {
+                    queue.removeFirst().first.recycle()
+                } catch (_: Exception) {
+                    // تجاهل أخطاء التحرير.
+                }
             }
         }
+
         return output.toString().trim()
     }
 
-    private fun appendUnique(output: StringBuilder, rawValue: String) {
+    private fun appendUnique(
+        output: StringBuilder,
+        seen: MutableSet<String>,
+        rawValue: String
+    ) {
         val value = rawValue.trim().take(MAX_SINGLE_TEXT_LENGTH)
-        if (value.isBlank() || output.contains(value)) return
-        if (output.isNotEmpty()) output.append('\n')
+        if (value.isBlank() || !seen.add(value)) return
+
         val remaining = MAX_CAPTURE_LENGTH - output.length
-        if (remaining > 0) output.append(value.take(remaining))
+        if (remaining <= 0) return
+
+        if (output.isNotEmpty()) output.append('\n')
+        output.append(value.take(remaining))
     }
 
     private fun showFloatingButton() {
@@ -116,7 +200,8 @@ class ScreenReaderService : AccessibilityService() {
         }
 
         val params = WindowManager.LayoutParams(
-            dp(52), dp(52),
+            dp(52),
+            dp(52),
             WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                 WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
@@ -142,22 +227,31 @@ class ScreenReaderService : AccessibilityService() {
                     moved = false
                     true
                 }
+
                 MotionEvent.ACTION_MOVE -> {
                     val dx = (startX - event.rawX).toInt()
                     val dy = (event.rawY - startY).toInt()
                     if (abs(dx) > dp(6) || abs(dy) > dp(6)) moved = true
+
                     if (moved) {
                         params.x = (initialX + dx).coerceAtLeast(0)
-                        val maxY = (resources.displayMetrics.heightPixels - dp(60)).coerceAtLeast(0)
+                        val maxY = (resources.displayMetrics.heightPixels - dp(60))
+                            .coerceAtLeast(0)
                         params.y = (initialY + dy).coerceIn(0, maxY)
-                        try { wm.updateViewLayout(view, params) } catch (_: Exception) { }
+                        try {
+                            wm.updateViewLayout(view, params)
+                        } catch (_: Exception) {
+                            // قد تُزال النافذة أثناء تغيير حالة الخدمة.
+                        }
                     }
                     true
                 }
+
                 MotionEvent.ACTION_UP -> {
                     if (!moved) view.performClick()
                     true
                 }
+
                 MotionEvent.ACTION_CANCEL -> true
                 else -> false
             }
@@ -182,26 +276,41 @@ class ScreenReaderService : AccessibilityService() {
         }
     }
 
-    override fun onInterrupt() = Unit
+    override fun onInterrupt() {
+        // لا نوقف الخدمة ولا نزيل الزر بسبب مقاطعة مؤقتة.
+    }
 
     override fun onDestroy() {
+        mainHandler.removeCallbacks(scanRunnable)
+        scanScheduled = false
+
         floatingButton?.let { view ->
-            try { windowManager?.removeView(view) } catch (_: Exception) { }
+            try {
+                windowManager?.removeView(view)
+            } catch (_: Exception) {
+                // قد تكون النافذة أزيلت مسبقاً.
+            }
         }
+
         floatingButton = null
         windowManager = null
         lastDetectedText = ""
         super.onDestroy()
     }
 
-    private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
+    private fun dp(value: Int): Int =
+        (value * resources.displayMetrics.density).toInt()
 
     companion object {
-        private const val MIN_SCAN_INTERVAL_MS = 700L
-        private const val MAX_NODES = 140
-        private const val MAX_DEPTH = 12
-        private const val MAX_CHILDREN_PER_NODE = 30
-        private const val MAX_SINGLE_TEXT_LENGTH = 300
-        private const val MAX_CAPTURE_LENGTH = 1800
+        private const val INITIAL_SCAN_DELAY_MS = 350L
+        private const val WINDOW_CHANGE_DELAY_MS = 500L
+        private const val SCROLL_DELAY_MS = 450L
+        private const val CONTENT_CHANGE_DELAY_MS = 350L
+
+        private const val MAX_NODES = 100
+        private const val MAX_DEPTH = 10
+        private const val MAX_CHILDREN_PER_NODE = 20
+        private const val MAX_SINGLE_TEXT_LENGTH = 250
+        private const val MAX_CAPTURE_LENGTH = 1200
     }
 }
