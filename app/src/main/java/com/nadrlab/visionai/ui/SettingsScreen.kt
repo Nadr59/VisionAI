@@ -24,6 +24,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.nadrlab.visionai.domain.CustomSearchEngine
 import com.nadrlab.visionai.domain.SearchEngine
+import com.nadrlab.visionai.service.ScreenCaptureActivity
+import com.nadrlab.visionai.service.ScreenCaptureService
 import com.nadrlab.visionai.service.ScreenReaderService
 import com.nadrlab.visionai.vm.MainViewModel
 
@@ -261,7 +263,7 @@ fun SettingsScreen(viewModel: MainViewModel) {
             }
             Spacer(Modifier.height(8.dp))
             Text(
-                "يقرأ التطبيق النصوص التي تتيحها التطبيقات عبر خدمة إمكانية الوصول، ثم يعرض الترجمة فوق موضع النص. بعض التطبيقات لا تكشف كل النصوص. على Android 10 لا يتوفر مسار لقطة الشاشة المستخدم في OCR الاحتياطي.",
+                "يقرأ التطبيق النصوص التي تتيحها التطبيقات عبر خدمة إمكانية الوصول، ثم يعرض الترجمة فوق موضع النص. بعض التطبيقات لا تكشف كل النصوص. عندما لا تكشف الشاشة نصاً (ألعاب، صور...) يمكن استخدام OCR للنصوص الإنجليزية عبر التقاط الشاشة، وهو يتطلب تشغيله من الزر أدناه وإشعاراً دائماً أثناء عمله.",
                 color = Color(0xFFBBBBBB),
                 fontSize = 12.sp
             )
@@ -297,6 +299,33 @@ fun SettingsScreen(viewModel: MainViewModel) {
                 shape = RoundedCornerShape(10.dp)
             ) {
                 Text("إعادة إنشاء الفقاعة الآن")
+            }
+            Spacer(Modifier.height(8.dp))
+            Button(
+                onClick = {
+                    context.startActivity(
+                        Intent(context, ScreenCaptureActivity::class.java)
+                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    )
+                },
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(10.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF16A34A))
+            ) {
+                Text("تشغيل OCR (التقاط الشاشة)")
+            }
+            Spacer(Modifier.height(8.dp))
+            OutlinedButton(
+                onClick = {
+                    ScreenCaptureService.stop(context)
+                    android.widget.Toast.makeText(
+                        context, "تم إيقاف التقاط الشاشة.", android.widget.Toast.LENGTH_SHORT
+                    ).show()
+                },
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(10.dp)
+            ) {
+                Text("إيقاف OCR")
             }
         }
 
