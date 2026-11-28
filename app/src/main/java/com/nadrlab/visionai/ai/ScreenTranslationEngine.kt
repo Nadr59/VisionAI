@@ -66,7 +66,7 @@ object ScreenTranslationEngine {
             }
         }
 
-        output
+        return output
     }
 
     @Synchronized
