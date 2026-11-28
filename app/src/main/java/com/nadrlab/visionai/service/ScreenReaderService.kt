@@ -68,17 +68,33 @@ class ScreenReaderService : AccessibilityService() {
         Log.i(TAG, "onServiceConnected")
         destroyed = false
         isConnected = true
+        instance = this
         if (scanExecutor.isShutdown) scanExecutor = Executors.newSingleThreadExecutor()
         if (translationExecutor.isShutdown) translationExecutor = Executors.newSingleThreadExecutor()
         try {
             windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
             appSettings = AppSettings(applicationContext)
-            addOverlay()
-            showFloatingButton()
+            // Always start from a clean state: a leftover view that still reports "attached" would make
+            // showFloatingButton() return early and the bubble would never come back.
+            rebuildWindows()
+            toast("مترجم الشاشة يعمل. اضغط الفقاعة لترجمة الشاشة.")
         } catch (error: Exception) {
             Log.e(TAG, "onServiceConnected failed", error)
+            toast("تعذر تشغيل الفقاعة: ${error.javaClass.simpleName}: ${error.message}", long = true)
             scheduleButtonRetry()
         }
+    }
+
+    /** Removes both overlay windows and creates them again from scratch. */
+    private fun rebuildWindows() {
+        floatingButton?.let { removeViewQuietly(it) }
+        translationOverlay?.let { removeViewQuietly(it) }
+        floatingButton = null
+        buttonParams = null
+        translationOverlay = null
+        busy = false
+        addOverlay()
+        showFloatingButton()
     }
 
     override fun onUnbind(intent: Intent?): Boolean {
@@ -102,6 +118,7 @@ class ScreenReaderService : AccessibilityService() {
 
     private fun cleanup() {
         destroyed = true
+        if (instance === this) instance = null
         mainHandler.removeCallbacksAndMessages(null)
         floatingButton?.let { removeViewQuietly(it) }
         translationOverlay?.let { removeViewQuietly(it) }
@@ -272,6 +289,7 @@ class ScreenReaderService : AccessibilityService() {
             floatingButton = null
             buttonParams = null
             Log.e(TAG, "Unable to create accessibility floating button", error)
+            toast("تعذر إنشاء الفقاعة: ${error.javaClass.simpleName}: ${error.message}", long = true)
             scheduleButtonRetry()
         }
     }
@@ -585,6 +603,26 @@ class ScreenReaderService : AccessibilityService() {
         private const val MIN_TEXT_LENGTH = 2
         private const val MIN_WIDTH_PX = 20
         private const val MIN_HEIGHT_PX = 10
+
+        @Volatile
+        private var instance: ScreenReaderService? = null
+
+        /**
+         * Called from the app UI: rebuilds the bubble and resets its saved position.
+         * Returns a message that tells the user what actually happened.
+         */
+        fun recreateButtonFromApp(): String {
+            val service = instance
+            if (service == null || !isConnected) {
+                return "الخدمة غير متصلة فعلياً. افتح إعدادات إمكانية الوصول، أوقف VisionAI ثم فعّلها."
+            }
+            service.mainHandler.post {
+                if (service.destroyed) return@post
+                service.positionPrefs.edit().clear().apply()
+                service.rebuildWindows()
+            }
+            return "تمت إعادة إنشاء الفقاعة. إن لم تظهر ستظهر رسالة بسبب الخطأ."
+        }
 
         /** True only while the system really has this service bound and running. */
         @Volatile
