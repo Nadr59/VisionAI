@@ -162,6 +162,12 @@ fun SettingsScreen(viewModel: MainViewModel) {
                         providerModel = "glm-5.3"
                         settings.saveProvider(providerName, providerUrl, providerKey, providerModel)
                     }
+                    PresetButton("Mistral", "mistral-small-latest") {
+                        providerName = "Mistral"
+                        providerUrl = "https://api.mistral.ai/v1/chat/completions"
+                        providerModel = "mistral-small-latest"
+                        settings.saveProvider(providerName, providerUrl, providerKey, providerModel)
+                    }
                     PresetButton("CometAPI", "glm-5.3") {
                         providerName = "CometAPI"
                         providerUrl = "https://api.cometapi.com/v1/chat/completions"
