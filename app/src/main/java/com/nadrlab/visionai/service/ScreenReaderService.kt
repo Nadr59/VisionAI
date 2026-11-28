@@ -6,6 +6,7 @@ import android.graphics.Rect
 import android.graphics.drawable.GradientDrawable
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
@@ -34,18 +35,30 @@ class ScreenReaderService : AccessibilityService() {
     @Volatile
     private var lastItems: List<ScreenItem> = emptyList()
 
+    @Volatile
+    private var destroyed = false
+
     private val mainHandler = Handler(Looper.getMainLooper())
-    private val worker = Executors.newSingleThreadExecutor()
+    private val scanExecutor = Executors.newSingleThreadExecutor()
+    private val translationExecutor = Executors.newSingleThreadExecutor()
+
     private var generation = 0
     private var scanPending = false
+    private var buttonRetryPending = false
 
     private val scanRunnable = Runnable {
         scanPending = false
         scanCurrentWindow()
     }
 
+    private val buttonRetryRunnable = Runnable {
+        buttonRetryPending = false
+        if (!destroyed && floatingButton == null) showFloatingButton()
+    }
+
     override fun onServiceConnected() {
         super.onServiceConnected()
+        destroyed = false
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
         appSettings = AppSettings(applicationContext)
         addOverlay()
@@ -54,13 +67,18 @@ class ScreenReaderService : AccessibilityService() {
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        if (event == null) return
+        if (event == null || destroyed) return
+
         val eventPackage = event.packageName?.toString() ?: return
         if (eventPackage == packageName) {
             clearOverlay()
+            ensureFloatingButton()
             return
         }
         if (eventPackage == SYSTEM_UI_PACKAGE) return
+
+        // Recover the button if the system removed its window while the service stayed enabled.
+        ensureFloatingButton()
 
         when (event.eventType) {
             AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED,
@@ -76,7 +94,15 @@ class ScreenReaderService : AccessibilityService() {
         }
     }
 
+    private fun ensureFloatingButton() {
+        val button = floatingButton
+        if (button != null && button.isAttachedToWindow) return
+        floatingButton = null
+        showFloatingButton()
+    }
+
     private fun scheduleScan(delay: Long, reset: Boolean) {
+        if (destroyed) return
         if (reset) {
             mainHandler.removeCallbacks(scanRunnable)
             scanPending = false
@@ -86,13 +112,40 @@ class ScreenReaderService : AccessibilityService() {
         mainHandler.postDelayed(scanRunnable, delay)
     }
 
-    private fun scanCurrentWindow() {
+    /** Accessibility tree traversal runs on a worker so it cannot freeze the service UI thread. */
+    private fun scanCurrentWindow(onComplete: ((List<ScreenItem>) -> Unit)? = null) {
+        if (destroyed) return
+
         try {
-            val root = rootInActiveWindow ?: return
-            if (root.packageName?.toString() == packageName) return
-            lastItems = collectVisibleText(root)
-        } catch (_: Exception) {
-            // Keep the last successful scan if the app temporarily blocks tree access.
+            scanExecutor.execute {
+                var result = emptyList<ScreenItem>()
+                try {
+                    val root = rootInActiveWindow
+                    if (root != null) {
+                        if (root.packageName?.toString() != packageName) {
+                            result = collectVisibleText(root)
+                        } else {
+                            root.recycle()
+                        }
+                    }
+                } catch (error: Exception) {
+                    Log.w(TAG, "Screen scan failed", error)
+                }
+
+                if (!destroyed) {
+                    mainHandler.post {
+                        if (destroyed) return@post
+                        // Replace the cache only after a successful window read.
+                        if (result.isNotEmpty()) lastItems = result
+                        onComplete?.invoke(lastItems)
+                    }
+                }
+            }
+        } catch (error: Exception) {
+            Log.e(TAG, "Unable to schedule screen scan", error)
+            onComplete?.let { callback ->
+                mainHandler.post { callback(lastItems) }
+            }
         }
     }
 
@@ -125,9 +178,16 @@ class ScreenReaderService : AccessibilityService() {
                         if (child != null) queue.add(child to (depth + 1))
                     }
                 }
-            } catch (_: Exception) {
-                // Ignore inaccessible nodes and continue.
+            } catch (error: Exception) {
+                Log.v(TAG, "Skipping inaccessible accessibility node", error)
+            } finally {
+                try { node.recycle() } catch (_: Exception) { }
             }
+        }
+
+        // Release nodes left in the queue if the safety limits were reached.
+        while (queue.isNotEmpty()) {
+            try { queue.removeFirst().first.recycle() } catch (_: Exception) { }
         }
         return result
     }
@@ -141,13 +201,17 @@ class ScreenReaderService : AccessibilityService() {
         val text = raw.trim()
         if (text.length < MIN_TEXT_LENGTH || text.none { it.isLetter() }) return
         if (!seen.add(text)) return
+        if (output.size >= MAX_ITEMS) return
         output.add(ScreenItem(text.take(MAX_TEXT_LENGTH), Rect(bounds)))
     }
 
     private fun showFloatingButton() {
-        if (floatingButton != null) return
-        val wm = windowManager ?: return
+        if (destroyed) return
+        val current = floatingButton
+        if (current != null && current.isAttachedToWindow) return
+        floatingButton = null
 
+        val wm = windowManager ?: return
         val button = TextView(this).apply {
             text = "تر"
             textSize = 16f
@@ -199,7 +263,11 @@ class ScreenReaderService : AccessibilityService() {
                         params.x = (initialX + dx).coerceAtLeast(0)
                         val maxY = (resources.displayMetrics.heightPixels - dp(60)).coerceAtLeast(0)
                         params.y = (initialY + dy).coerceIn(0, maxY)
-                        try { wm.updateViewLayout(view, params) } catch (_: Exception) { }
+                        try {
+                            wm.updateViewLayout(view, params)
+                        } catch (error: Exception) {
+                            Log.w(TAG, "Unable to move floating button", error)
+                        }
                     }
                     true
                 }
@@ -217,65 +285,94 @@ class ScreenReaderService : AccessibilityService() {
         try {
             wm.addView(button, params)
             floatingButton = button
-        } catch (_: Exception) {
+            buttonRetryPending = false
+            mainHandler.removeCallbacks(buttonRetryRunnable)
+        } catch (error: Exception) {
             floatingButton = null
+            Log.e(TAG, "Unable to create accessibility floating button", error)
+            scheduleButtonRetry()
         }
     }
 
+    private fun scheduleButtonRetry() {
+        if (destroyed || buttonRetryPending) return
+        buttonRetryPending = true
+        mainHandler.postDelayed(buttonRetryRunnable, BUTTON_RETRY_DELAY_MS)
+    }
+
     private fun translateCurrentScreen() {
-        scanCurrentWindow()
-        val items = lastItems.toList()
-        if (items.isEmpty()) {
-            Toast.makeText(
-                this,
-                "لم يتمكن التطبيق من قراءة نصوص هذه الشاشة عبر إمكانية الوصول.",
-                Toast.LENGTH_LONG
-            ).show()
-            return
-        }
-
         floatingButton?.isEnabled = false
-        Toast.makeText(this, "جاري ترجمة ${items.size} مقطعاً...", Toast.LENGTH_SHORT).show()
-        val currentGeneration = ++generation
+        Toast.makeText(this, "جاري قراءة نصوص الشاشة...", Toast.LENGTH_SHORT).show()
 
-        worker.execute {
+        scanCurrentWindow { items ->
+            if (items.isEmpty()) {
+                floatingButton?.isEnabled = true
+                Toast.makeText(
+                    this,
+                    "لم يتمكن التطبيق من قراءة نصوص هذه الشاشة عبر إمكانية الوصول.",
+                    Toast.LENGTH_LONG
+                ).show()
+                return@scanCurrentWindow
+            }
+
+            Toast.makeText(this, "جاري ترجمة ${items.size} مقطعاً...", Toast.LENGTH_SHORT).show()
+            val currentGeneration = ++generation
+
             try {
-                val translations = kotlinx.coroutines.runBlocking {
-                    ScreenTranslationEngine.translateBatch(items.map { it.text }, appSettings)
-                }
-                val translatedItems = items.mapIndexedNotNull { index, item ->
-                    val translated = translations.getOrNull(index)?.trim().orEmpty()
-                    if (translated.isBlank() || translated == item.text) null
-                    else item to translated
-                }
+                translationExecutor.execute {
+                    try {
+                        val translations = kotlinx.coroutines.runBlocking {
+                            ScreenTranslationEngine.translateBatch(items.map { it.text }, appSettings)
+                        }
+                        val translatedItems = items.mapIndexedNotNull { index, item ->
+                            val translated = translations.getOrNull(index)?.trim().orEmpty()
+                            if (translated.isBlank() || translated == item.text) null
+                            else item to translated
+                        }
 
-                mainHandler.post {
-                    floatingButton?.isEnabled = true
-                    if (currentGeneration != generation) return@post
-                    if (translatedItems.isEmpty()) {
-                        Toast.makeText(this, "لم يعثر محرك الترجمة على نص يحتاج إلى ترجمة.", Toast.LENGTH_LONG).show()
-                    } else {
-                        renderTranslations(translatedItems)
-                        Toast.makeText(this, "تمت ترجمة ${translatedItems.size} مقطعاً.", Toast.LENGTH_SHORT).show()
+                        mainHandler.post {
+                            floatingButton?.isEnabled = true
+                            if (destroyed || currentGeneration != generation) return@post
+                            if (translatedItems.isEmpty()) {
+                                Toast.makeText(
+                                    this,
+                                    "لم يعثر محرك الترجمة على نص يحتاج إلى ترجمة.",
+                                    Toast.LENGTH_LONG
+                                ).show()
+                            } else {
+                                renderTranslations(translatedItems)
+                                Toast.makeText(
+                                    this,
+                                    "تمت ترجمة ${translatedItems.size} مقطعاً.",
+                                    Toast.LENGTH_SHORT
+                                ).show()
+                            }
+                        }
+                    } catch (error: Exception) {
+                        mainHandler.post {
+                            floatingButton?.isEnabled = true
+                            if (!destroyed && currentGeneration == generation) {
+                                Toast.makeText(
+                                    this,
+                                    "تعذرت الترجمة: ${error.message ?: "خطأ غير معروف"}",
+                                    Toast.LENGTH_LONG
+                                ).show()
+                            }
+                        }
                     }
                 }
             } catch (error: Exception) {
-                mainHandler.post {
-                    floatingButton?.isEnabled = true
-                    if (currentGeneration == generation) {
-                        Toast.makeText(
-                            this,
-                            "تعذرت الترجمة: ${error.message ?: "خطأ غير معروف"}",
-                            Toast.LENGTH_LONG
-                        ).show()
-                    }
-                }
+                floatingButton?.isEnabled = true
+                Log.e(TAG, "Unable to schedule translation", error)
             }
         }
     }
 
     private fun addOverlay() {
-        if (translationOverlay != null) return
+        val existing = translationOverlay
+        if (existing != null && existing.isAttachedToWindow) return
+        translationOverlay = null
+
         val wm = windowManager ?: return
         val overlay = FrameLayout(this)
         val params = WindowManager.LayoutParams(
@@ -284,20 +381,21 @@ class ScreenReaderService : AccessibilityService() {
             WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                 WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
-                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
-                WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
             PixelFormat.TRANSLUCENT
         ).apply { gravity = Gravity.TOP or Gravity.LEFT }
 
         try {
             wm.addView(overlay, params)
             translationOverlay = overlay
-        } catch (_: Exception) {
+        } catch (error: Exception) {
             translationOverlay = null
+            Log.e(TAG, "Unable to create translation overlay", error)
         }
     }
 
     private fun renderTranslations(items: List<Pair<ScreenItem, String>>) {
+        addOverlay()
         val overlay = translationOverlay ?: return
         overlay.removeAllViews()
         val screenWidth = resources.displayMetrics.widthPixels
@@ -344,13 +442,19 @@ class ScreenReaderService : AccessibilityService() {
     }
 
     override fun onDestroy() {
+        destroyed = true
         mainHandler.removeCallbacksAndMessages(null)
-        floatingButton?.let { try { windowManager?.removeView(it) } catch (_: Exception) { } }
-        translationOverlay?.let { try { windowManager?.removeView(it) } catch (_: Exception) { } }
+        floatingButton?.let {
+            try { windowManager?.removeView(it) } catch (_: Exception) { }
+        }
+        translationOverlay?.let {
+            try { windowManager?.removeView(it) } catch (_: Exception) { }
+        }
         floatingButton = null
         translationOverlay = null
         lastItems = emptyList()
-        worker.shutdownNow()
+        scanExecutor.shutdownNow()
+        translationExecutor.shutdownNow()
         ScreenTranslationEngine.close()
         windowManager = null
         super.onDestroy()
@@ -359,15 +463,17 @@ class ScreenReaderService : AccessibilityService() {
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
 
     companion object {
+        private const val TAG = "ScreenReaderService"
         private const val SYSTEM_UI_PACKAGE = "com.android.systemui"
-        private const val INITIAL_SCAN_DELAY_MS = 350L
-        private const val SCROLL_SCAN_DELAY_MS = 550L
-        private const val CONTENT_SCAN_DELAY_MS = 750L
-        private const val MAX_NODES = 220
-        private const val MAX_DEPTH = 18
-        private const val MAX_CHILDREN_PER_NODE = 35
-        private const val MAX_ITEMS = 60
-        private const val MAX_TEXT_LENGTH = 1000
+        private const val INITIAL_SCAN_DELAY_MS = 500L
+        private const val SCROLL_SCAN_DELAY_MS = 650L
+        private const val CONTENT_SCAN_DELAY_MS = 900L
+        private const val BUTTON_RETRY_DELAY_MS = 1500L
+        private const val MAX_NODES = 120
+        private const val MAX_DEPTH = 12
+        private const val MAX_CHILDREN_PER_NODE = 20
+        private const val MAX_ITEMS = 30
+        private const val MAX_TEXT_LENGTH = 700
         private const val MIN_TEXT_LENGTH = 2
         private const val MIN_WIDTH_PX = 20
         private const val MIN_HEIGHT_PX = 10
