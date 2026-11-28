@@ -67,6 +67,10 @@ implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.8.1")     // ←
     // ML Kit OCR
     implementation("com.google.mlkit:text-recognition:16.0.1")
 
+    // ML Kit on-device screen translation and language detection
+    implementation("com.google.mlkit:translate:17.0.1")
+    implementation("com.google.mlkit:language-id:17.0.4")
+
     
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
 
