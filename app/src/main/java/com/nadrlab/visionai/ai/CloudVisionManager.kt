@@ -89,7 +89,8 @@ object CloudVisionManager {
                         base64, prompt,
                         s.providerUrl, s.providerKey, s.providerModel
                     )
-                    if (result.isSuccess) return@withContext result
+                    // لا نعود بصمت لـ VisionAI Cloud: يجب أن يظهر خطأ المزود المخصص الحقيقي
+                    return@withContext result
                 }
 
                 // VisionAI Cloud — /api/ask مع صورة
@@ -127,7 +128,8 @@ object CloudVisionManager {
                         prompt,
                         s.providerUrl, s.providerKey, s.providerModel
                     )
-                    if (result.isSuccess) return@withContext result
+                    // لا نعود بصمت لـ VisionAI Cloud: يجب أن يظهر خطأ المزود المخصص الحقيقي
+                    return@withContext result
                 }
 
                 // VisionAI Cloud — /api/ask
@@ -278,14 +280,14 @@ object CloudVisionManager {
             }
 
             val body = JSONObject().apply {
-                put("model", model.ifBlank { "gpt-4o" })
+                put("model", model.trim().ifBlank { "gpt-4o" })
                 put("messages", messages)
                 put("max_tokens", 1500)
             }.toString()
 
             val request = Request.Builder()
-                .url(url)
-                .addHeader("Authorization", "Bearer $apiKey")
+                .url(normalizeEndpoint(url))
+                .addHeader("Authorization", "Bearer ${apiKey.trim()}")
                 .addHeader("Content-Type", "application/json")
                 .post(body.toRequestBody("application/json".toMediaType()))
                 .build()
@@ -294,7 +296,7 @@ object CloudVisionManager {
             val responseBody = response.body?.string() ?: ""
 
             if (!response.isSuccessful) {
-                return Result.failure(Exception("مزود مخصص ${response.code}"))
+                return Result.failure(Exception(providerError(response.code, responseBody)))
             }
 
             val json = JSONObject(responseBody)
@@ -325,14 +327,14 @@ object CloudVisionManager {
             }
 
             val body = JSONObject().apply {
-                put("model", model.ifBlank { "gpt-4o" })
+                put("model", model.trim().ifBlank { "gpt-4o" })
                 put("messages", messages)
-                put("max_tokens", 1500)
+                put("max_tokens", 3000)
             }.toString()
 
             val request = Request.Builder()
-                .url(url)
-                .addHeader("Authorization", "Bearer $apiKey")
+                .url(normalizeEndpoint(url))
+                .addHeader("Authorization", "Bearer ${apiKey.trim()}")
                 .addHeader("Content-Type", "application/json")
                 .post(body.toRequestBody("application/json".toMediaType()))
                 .build()
@@ -341,7 +343,7 @@ object CloudVisionManager {
             val responseBody = response.body?.string() ?: ""
 
             if (!response.isSuccessful) {
-                return Result.failure(Exception("مزود مخصص ${response.code}"))
+                return Result.failure(Exception(providerError(response.code, responseBody)))
             }
 
             val json = JSONObject(responseBody)
@@ -354,6 +356,39 @@ object CloudVisionManager {
         } catch (e: Exception) {
             Result.failure(e)
         }
+    }
+
+    // ═══════════════════════════════════════════
+    //  أدوات المزود المخصص
+    // ═══════════════════════════════════════════
+
+    /** يقبل https://api.mistral.ai/v1 ويحوّله إلى .../v1/chat/completions. */
+    private fun normalizeEndpoint(raw: String): String {
+        val url = raw.trim().trimEnd('/')
+        return if (url.endsWith("/chat/completions") || url.endsWith("/completions")) url
+        else "$url/chat/completions"
+    }
+
+    private fun providerError(code: Int, body: String): String {
+        val rawDetail = try {
+            val json = JSONObject(body)
+            json.optJSONObject("error")?.optString("message")?.takeIf { it.isNotBlank() }
+                ?: json.optString("message").takeIf { it.isNotBlank() }
+                ?: json.optString("detail").takeIf { it.isNotBlank() }
+                ?: body
+        } catch (_: Exception) {
+            body
+        }
+        val detail = rawDetail.take(200)
+        val hint = when (code) {
+            401, 403 -> "تحقق من مفتاح API"
+            404 -> "تحقق من الرابط واسم النموذج"
+            400, 422 -> "تحقق من اسم النموذج"
+            429 -> "تم تجاوز حد الطلبات"
+            else -> ""
+        }
+        return "مزود مخصص $code" + (if (hint.isNotEmpty()) " ($hint)" else "") +
+            (if (detail.isNotBlank()) ": $detail" else "")
     }
 
     // ═══════════════════════════════════════════
