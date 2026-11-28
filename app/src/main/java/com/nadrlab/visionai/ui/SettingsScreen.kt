@@ -24,6 +24,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.nadrlab.visionai.domain.CustomSearchEngine
 import com.nadrlab.visionai.domain.SearchEngine
+import com.nadrlab.visionai.service.ScreenReaderService
 import com.nadrlab.visionai.vm.MainViewModel
 
 @Composable
@@ -282,6 +283,20 @@ fun SettingsScreen(viewModel: MainViewModel) {
                 Icon(Icons.Default.Accessibility, null, modifier = Modifier.size(18.dp))
                 Spacer(Modifier.width(8.dp))
                 Text("إظهار / إعادة تشغيل الزر العائم")
+            }
+            Spacer(Modifier.height(8.dp))
+            OutlinedButton(
+                onClick = {
+                    android.widget.Toast.makeText(
+                        context,
+                        ScreenReaderService.recreateButtonFromApp(),
+                        android.widget.Toast.LENGTH_LONG
+                    ).show()
+                },
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(10.dp)
+            ) {
+                Text("إعادة إنشاء الفقاعة الآن")
             }
         }
 
