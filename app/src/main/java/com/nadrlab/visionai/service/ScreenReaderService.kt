@@ -2,181 +2,146 @@ package com.nadrlab.visionai.service
 
 import android.accessibilityservice.AccessibilityService
 import android.graphics.PixelFormat
+import android.graphics.Rect
 import android.graphics.drawable.GradientDrawable
 import android.os.Handler
 import android.os.Looper
 import android.view.Gravity
 import android.view.MotionEvent
+import android.view.View
 import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import android.widget.FrameLayout
 import android.widget.TextView
 import android.widget.Toast
+import com.nadrlab.visionai.ai.ScreenTranslationEngine
+import com.nadrlab.visionai.data.AppSettings
 import java.util.ArrayDeque
+import java.util.concurrent.Executors
 import kotlin.math.abs
 
-/**
- * قارئ شاشة محدود الحمل:
- * - يقرأ النصوص المتاحة عبر Accessibility فقط.
- * - يؤجل الفحص حتى تستقر أحداث الشاشة بدلاً من فحصها مع كل حدث.
- * - يضع حدوداً صارمة لعدد العناصر وعمق الشجرة.
- * - لا يلتقط الشاشة ولا يرسل النصوص إلى الإنترنت.
- */
+/** Reads accessible screen text, translates it and draws translations in an overlay. */
 class ScreenReaderService : AccessibilityService() {
+
+    private data class ScreenItem(val text: String, val bounds: Rect)
 
     private var windowManager: WindowManager? = null
     private var floatingButton: TextView? = null
-    private var lastDetectedText: String = ""
+    private var translationOverlay: FrameLayout? = null
+    private lateinit var appSettings: AppSettings
+
+    @Volatile
+    private var lastItems: List<ScreenItem> = emptyList()
 
     private val mainHandler = Handler(Looper.getMainLooper())
-    private var scanScheduled = false
+    private val worker = Executors.newSingleThreadExecutor()
+    private var generation = 0
+    private var scanPending = false
 
     private val scanRunnable = Runnable {
-        scanScheduled = false
-        scanActiveWindow()
+        scanPending = false
+        scanCurrentWindow()
     }
 
     override fun onServiceConnected() {
         super.onServiceConnected()
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
+        appSettings = AppSettings(applicationContext)
+        addOverlay()
         showFloatingButton()
         scheduleScan(INITIAL_SCAN_DELAY_MS, reset = true)
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event == null) return
-        if (event.packageName?.toString() == packageName) return
+        val eventPackage = event.packageName?.toString() ?: return
+        if (eventPackage == packageName) {
+            clearOverlay()
+            return
+        }
+        if (eventPackage == SYSTEM_UI_PACKAGE) return
 
         when (event.eventType) {
-            AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> {
-                scheduleScan(WINDOW_CHANGE_DELAY_MS, reset = true)
-            }
-
+            AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED,
             AccessibilityEvent.TYPE_VIEW_SCROLLED -> {
-                scheduleScan(SCROLL_DELAY_MS, reset = true)
+                clearOverlay()
+                scheduleScan(SCROLL_SCAN_DELAY_MS, reset = true)
             }
-
-            AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED -> {
-                // لا نعيد ضبط المؤقت مع كل حدث؛ حتى لا يتأخر الفحص إلى ما لا نهاية.
-                scheduleScan(CONTENT_CHANGE_DELAY_MS, reset = false)
+            AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED,
+            AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED,
+            AccessibilityEvent.TYPE_VIEW_FOCUSED -> {
+                scheduleScan(CONTENT_SCAN_DELAY_MS, reset = false)
             }
-
-            else -> Unit
         }
     }
 
-    /**
-     * جدولة الفحص على الخيط الرئيسي بعد هدوء أحداث الواجهة.
-     * الفحص متزامن ومحدود، ولا توجد مهام متوازية تتراكم.
-     */
-    private fun scheduleScan(delayMs: Long, reset: Boolean) {
+    private fun scheduleScan(delay: Long, reset: Boolean) {
         if (reset) {
             mainHandler.removeCallbacks(scanRunnable)
-            scanScheduled = false
+            scanPending = false
         }
-        if (scanScheduled) return
-
-        scanScheduled = true
-        mainHandler.postDelayed(scanRunnable, delayMs)
+        if (scanPending) return
+        scanPending = true
+        mainHandler.postDelayed(scanRunnable, delay)
     }
 
-    private fun scanActiveWindow() {
-        if (floatingButton == null || floatingButton?.isAttachedToWindow != true) {
-            floatingButton = null
-            showFloatingButton()
-        }
-
-        val root = try {
-            rootInActiveWindow
+    private fun scanCurrentWindow() {
+        try {
+            val root = rootInActiveWindow ?: return
+            if (root.packageName?.toString() == packageName) return
+            lastItems = collectVisibleText(root)
         } catch (_: Exception) {
-            null
-        } ?: return
-
-        lastDetectedText = collectVisibleText(root).take(MAX_CAPTURE_LENGTH)
+            // Keep the last successful scan if the app temporarily blocks tree access.
+        }
     }
 
-    /**
-     * قراءة محدودة بطريقة BFS لتجنب التعمق الكبير في شجرة التطبيقات.
-     * يتم تحرير كل AccessibilityNodeInfo بعد الانتهاء منه.
-     */
-    private fun collectVisibleText(root: AccessibilityNodeInfo): String {
-        val output = StringBuilder()
-        val seen = LinkedHashSet<String>()
+    private fun collectVisibleText(root: AccessibilityNodeInfo): List<ScreenItem> {
+        val result = mutableListOf<ScreenItem>()
+        val seen = HashSet<String>()
         val queue = ArrayDeque<Pair<AccessibilityNodeInfo, Int>>()
         queue.add(root to 0)
-
         var visited = 0
 
-        try {
-            while (queue.isNotEmpty() &&
-                visited < MAX_NODES &&
-                output.length < MAX_CAPTURE_LENGTH
-            ) {
-                val (node, depth) = queue.removeFirst()
-                visited++
-
-                try {
-                    if (!node.isVisibleToUser) continue
-
-                    if (!node.isPassword) {
-                        appendUnique(output, seen, node.text?.toString().orEmpty())
-                        appendUnique(
-                            output,
-                            seen,
-                            node.contentDescription?.toString().orEmpty()
-                        )
-                    }
-
-                    if (depth >= MAX_DEPTH) continue
-
-                    val childCount = minOf(node.childCount, MAX_CHILDREN_PER_NODE)
-                    for (index in 0 until childCount) {
-                        val child = try {
-                            node.getChild(index)
-                        } catch (_: Exception) {
-                            null
-                        }
-                        if (child != null) {
-                            queue.add(child to (depth + 1))
-                        }
-                    }
-                } catch (_: Exception) {
-                    // قد تتغير شجرة التطبيق أثناء القراءة؛ نتجاوز العنصر المتعذر.
-                } finally {
-                    try {
-                        node.recycle()
-                    } catch (_: Exception) {
-                        // recycle غير مؤثر في إصدارات Android الحديثة.
+        while (queue.isNotEmpty() && visited < MAX_NODES && result.size < MAX_ITEMS) {
+            val (node, depth) = queue.removeFirst()
+            visited++
+            try {
+                if (node.isVisibleToUser && !node.isEditable && !node.isPassword) {
+                    val bounds = Rect()
+                    node.getBoundsInScreen(bounds)
+                    if (bounds.width() >= MIN_WIDTH_PX && bounds.height() >= MIN_HEIGHT_PX) {
+                        val text = node.text?.toString()?.trim().orEmpty()
+                        addItem(text, bounds, seen, result)
+                        val description = node.contentDescription?.toString()?.trim().orEmpty()
+                        if (description != text) addItem(description, bounds, seen, result)
                     }
                 }
-            }
-        } finally {
-            // تحرير أي عناصر بقيت في الطابور عند بلوغ الحد الأقصى.
-            while (queue.isNotEmpty()) {
-                try {
-                    queue.removeFirst().first.recycle()
-                } catch (_: Exception) {
-                    // تجاهل أخطاء التحرير.
+
+                if (depth < MAX_DEPTH) {
+                    val count = minOf(node.childCount, MAX_CHILDREN_PER_NODE)
+                    for (index in 0 until count) {
+                        val child = try { node.getChild(index) } catch (_: Exception) { null }
+                        if (child != null) queue.add(child to (depth + 1))
+                    }
                 }
+            } catch (_: Exception) {
+                // Ignore inaccessible nodes and continue.
             }
         }
-
-        return output.toString().trim()
+        return result
     }
 
-    private fun appendUnique(
-        output: StringBuilder,
-        seen: MutableSet<String>,
-        rawValue: String
+    private fun addItem(
+        raw: String,
+        bounds: Rect,
+        seen: HashSet<String>,
+        output: MutableList<ScreenItem>
     ) {
-        val value = rawValue.trim().take(MAX_SINGLE_TEXT_LENGTH)
-        if (value.isBlank() || !seen.add(value)) return
-
-        val remaining = MAX_CAPTURE_LENGTH - output.length
-        if (remaining <= 0) return
-
-        if (output.isNotEmpty()) output.append('\n')
-        output.append(value.take(remaining))
+        val text = raw.trim()
+        if (text.length < MIN_TEXT_LENGTH || text.none { it.isLetter() }) return
+        if (!seen.add(text)) return
+        output.add(ScreenItem(text.take(MAX_TEXT_LENGTH), Rect(bounds)))
     }
 
     private fun showFloatingButton() {
@@ -188,7 +153,7 @@ class ScreenReaderService : AccessibilityService() {
             textSize = 16f
             setTextColor(0xFFFFFFFF.toInt())
             gravity = Gravity.CENTER
-            contentDescription = "زر مترجم الشاشة"
+            contentDescription = "ترجمة الشاشة"
             background = GradientDrawable().apply {
                 shape = GradientDrawable.OVAL
                 setColor(0xFF0284C7.toInt())
@@ -200,8 +165,7 @@ class ScreenReaderService : AccessibilityService() {
         }
 
         val params = WindowManager.LayoutParams(
-            dp(52),
-            dp(52),
+            dp(52), dp(52),
             WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                 WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
@@ -227,46 +191,28 @@ class ScreenReaderService : AccessibilityService() {
                     moved = false
                     true
                 }
-
                 MotionEvent.ACTION_MOVE -> {
                     val dx = (startX - event.rawX).toInt()
                     val dy = (event.rawY - startY).toInt()
                     if (abs(dx) > dp(6) || abs(dy) > dp(6)) moved = true
-
                     if (moved) {
                         params.x = (initialX + dx).coerceAtLeast(0)
-                        val maxY = (resources.displayMetrics.heightPixels - dp(60))
-                            .coerceAtLeast(0)
+                        val maxY = (resources.displayMetrics.heightPixels - dp(60)).coerceAtLeast(0)
                         params.y = (initialY + dy).coerceIn(0, maxY)
-                        try {
-                            wm.updateViewLayout(view, params)
-                        } catch (_: Exception) {
-                            // قد تُزال النافذة أثناء تغيير حالة الخدمة.
-                        }
+                        try { wm.updateViewLayout(view, params) } catch (_: Exception) { }
                     }
                     true
                 }
-
                 MotionEvent.ACTION_UP -> {
                     if (!moved) view.performClick()
                     true
                 }
-
                 MotionEvent.ACTION_CANCEL -> true
                 else -> false
             }
         }
 
-        button.setOnClickListener {
-            val text = lastDetectedText
-            val message = if (text.isBlank()) {
-                "لم يُكتشف نص متاح. انتقل إلى صفحة تحتوي على نص ثم اضغط مجدداً."
-            } else {
-                val lineCount = text.lines().count { it.isNotBlank() }
-                "تم رصد $lineCount مقطعاً نصياً. ستُضاف الترجمة في المرحلة التالية."
-            }
-            Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
-        }
+        button.setOnClickListener { translateCurrentScreen() }
 
         try {
             wm.addView(button, params)
@@ -276,41 +222,154 @@ class ScreenReaderService : AccessibilityService() {
         }
     }
 
+    private fun translateCurrentScreen() {
+        scanCurrentWindow()
+        val items = lastItems.toList()
+        if (items.isEmpty()) {
+            Toast.makeText(
+                this,
+                "لم يتمكن التطبيق من قراءة نصوص هذه الشاشة عبر إمكانية الوصول.",
+                Toast.LENGTH_LONG
+            ).show()
+            return
+        }
+
+        floatingButton?.isEnabled = false
+        Toast.makeText(this, "جاري ترجمة ${items.size} مقطعاً...", Toast.LENGTH_SHORT).show()
+        val currentGeneration = ++generation
+
+        worker.execute {
+            try {
+                val translations = kotlinx.coroutines.runBlocking {
+                    ScreenTranslationEngine.translateBatch(items.map { it.text }, appSettings)
+                }
+                val translatedItems = items.mapIndexedNotNull { index, item ->
+                    val translated = translations.getOrNull(index)?.trim().orEmpty()
+                    if (translated.isBlank() || translated == item.text) null
+                    else item to translated
+                }
+
+                mainHandler.post {
+                    floatingButton?.isEnabled = true
+                    if (currentGeneration != generation) return@post
+                    if (translatedItems.isEmpty()) {
+                        Toast.makeText(this, "لم يعثر محرك الترجمة على نص يحتاج إلى ترجمة.", Toast.LENGTH_LONG).show()
+                    } else {
+                        renderTranslations(translatedItems)
+                        Toast.makeText(this, "تمت ترجمة ${translatedItems.size} مقطعاً.", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            } catch (error: Exception) {
+                mainHandler.post {
+                    floatingButton?.isEnabled = true
+                    if (currentGeneration == generation) {
+                        Toast.makeText(
+                            this,
+                            "تعذرت الترجمة: ${error.message ?: "خطأ غير معروف"}",
+                            Toast.LENGTH_LONG
+                        ).show()
+                    }
+                }
+            }
+        }
+    }
+
+    private fun addOverlay() {
+        if (translationOverlay != null) return
+        val wm = windowManager ?: return
+        val overlay = FrameLayout(this)
+        val params = WindowManager.LayoutParams(
+            WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+            PixelFormat.TRANSLUCENT
+        ).apply { gravity = Gravity.TOP or Gravity.LEFT }
+
+        try {
+            wm.addView(overlay, params)
+            translationOverlay = overlay
+        } catch (_: Exception) {
+            translationOverlay = null
+        }
+    }
+
+    private fun renderTranslations(items: List<Pair<ScreenItem, String>>) {
+        val overlay = translationOverlay ?: return
+        overlay.removeAllViews()
+        val screenWidth = resources.displayMetrics.widthPixels
+        val screenHeight = resources.displayMetrics.heightPixels
+        val rtl = appSettings.screenTranslationTarget in setOf("ar", "fa", "ur", "he")
+
+        items.forEach { (item, translation) ->
+            val bounds = Rect(item.bounds)
+            if (bounds.right <= 0 || bounds.bottom <= 0 ||
+                bounds.left >= screenWidth || bounds.top >= screenHeight) return@forEach
+
+            val width = bounds.width().coerceIn(dp(48), screenWidth)
+            val height = bounds.height().coerceAtLeast(dp(30)).coerceAtMost(dp(120))
+            val label = TextView(this).apply {
+                text = translation
+                textSize = 12f
+                setTextColor(0xFF111111.toInt())
+                gravity = Gravity.CENTER_VERTICAL or (if (rtl) Gravity.RIGHT else Gravity.LEFT)
+                textDirection = if (rtl) View.TEXT_DIRECTION_RTL else View.TEXT_DIRECTION_LTR
+                layoutDirection = if (rtl) View.LAYOUT_DIRECTION_RTL else View.LAYOUT_DIRECTION_LTR
+                maxLines = 5
+                setPadding(dp(4), dp(2), dp(4), dp(2))
+                background = GradientDrawable().apply {
+                    setColor(0xF5FFF7D6.toInt())
+                    cornerRadius = dp(4).toFloat()
+                    setStroke(dp(1), 0xFFB8A66A.toInt())
+                }
+            }
+            val layout = FrameLayout.LayoutParams(width, height).apply {
+                leftMargin = bounds.left.coerceIn(0, (screenWidth - width).coerceAtLeast(0))
+                topMargin = bounds.top.coerceIn(0, (screenHeight - height).coerceAtLeast(0))
+            }
+            overlay.addView(label, layout)
+        }
+    }
+
+    private fun clearOverlay() {
+        generation++
+        translationOverlay?.removeAllViews()
+    }
+
     override fun onInterrupt() {
-        // لا نوقف الخدمة ولا نزيل الزر بسبب مقاطعة مؤقتة.
+        clearOverlay()
     }
 
     override fun onDestroy() {
-        mainHandler.removeCallbacks(scanRunnable)
-        scanScheduled = false
-
-        floatingButton?.let { view ->
-            try {
-                windowManager?.removeView(view)
-            } catch (_: Exception) {
-                // قد تكون النافذة أزيلت مسبقاً.
-            }
-        }
-
+        mainHandler.removeCallbacksAndMessages(null)
+        floatingButton?.let { try { windowManager?.removeView(it) } catch (_: Exception) { } }
+        translationOverlay?.let { try { windowManager?.removeView(it) } catch (_: Exception) { } }
         floatingButton = null
+        translationOverlay = null
+        lastItems = emptyList()
+        worker.shutdownNow()
+        ScreenTranslationEngine.close()
         windowManager = null
-        lastDetectedText = ""
         super.onDestroy()
     }
 
-    private fun dp(value: Int): Int =
-        (value * resources.displayMetrics.density).toInt()
+    private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
 
     companion object {
+        private const val SYSTEM_UI_PACKAGE = "com.android.systemui"
         private const val INITIAL_SCAN_DELAY_MS = 350L
-        private const val WINDOW_CHANGE_DELAY_MS = 500L
-        private const val SCROLL_DELAY_MS = 450L
-        private const val CONTENT_CHANGE_DELAY_MS = 350L
-
-        private const val MAX_NODES = 100
-        private const val MAX_DEPTH = 10
-        private const val MAX_CHILDREN_PER_NODE = 20
-        private const val MAX_SINGLE_TEXT_LENGTH = 250
-        private const val MAX_CAPTURE_LENGTH = 1200
+        private const val SCROLL_SCAN_DELAY_MS = 550L
+        private const val CONTENT_SCAN_DELAY_MS = 750L
+        private const val MAX_NODES = 220
+        private const val MAX_DEPTH = 18
+        private const val MAX_CHILDREN_PER_NODE = 35
+        private const val MAX_ITEMS = 60
+        private const val MAX_TEXT_LENGTH = 1000
+        private const val MIN_TEXT_LENGTH = 2
+        private const val MIN_WIDTH_PX = 20
+        private const val MIN_HEIGHT_PX = 10
     }
 }
