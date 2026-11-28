@@ -25,6 +25,14 @@ class AppSettings(context: Context) {
         get() = prefs.getString("provider_name", "") ?: ""
         set(v) = prefs.edit().putString("provider_name", v).apply()
 
+    var screenTranslationEngine: String
+        get() = prefs.getString("screen_translation_engine", "MLKIT") ?: "MLKIT"
+        set(v) = prefs.edit().putString("screen_translation_engine", v).apply()
+
+    var screenTranslationTarget: String
+        get() = prefs.getString("screen_translation_target", "ar") ?: "ar"
+        set(v) = prefs.edit().putString("screen_translation_target", v).apply()
+
     var searchEnabled: Boolean
         get() = prefs.getBoolean("search_enabled", true)
         set(v) = prefs.edit().putBoolean("search_enabled", v).apply()
