@@ -17,6 +17,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.nadrlab.visionai.service.ScreenReaderService
 import com.nadrlab.visionai.ui.*
 import com.nadrlab.visionai.ui.theme.VisionAITheme
 import com.nadrlab.visionai.vm.MainViewModel
@@ -39,6 +40,33 @@ class MainActivity : ComponentActivity() {
             VisionAITheme {
                 VisionAINavigation(sharedImageUri)
             }
+        }
+    }
+
+    private var serviceDialogShown = false
+
+    override fun onResume() {
+        super.onResume()
+        // Accessibility may be "enabled" in Settings while its process was killed with the app
+        // (swipe from recents on many devices) and never rebound. Give the system a moment, then warn.
+        window.decorView.postDelayed({ warnIfTranslationServiceIsDead() }, 3000)
+    }
+
+    private fun warnIfTranslationServiceIsDead() {
+        if (isFinishing || isDestroyed || serviceDialogShown) return
+        if (ScreenReaderService.isEnabledInSettings(this) && !ScreenReaderService.isConnected) {
+            serviceDialogShown = true
+            android.app.AlertDialog.Builder(this)
+                .setTitle("مترجم الشاشة متوقف")
+                .setMessage(
+                    "الخدمة مفعّلة في إعدادات إمكانية الوصول لكنها غير شغّالة فعلياً، لذلك لا تظهر الفقاعة. " +
+                        "افتح الإعدادات، اختر VisionAI، أوقف الخدمة ثم فعّلها من جديد."
+                )
+                .setPositiveButton("فتح الإعدادات") { _, _ ->
+                    startActivity(Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                }
+                .setNegativeButton("لاحقاً", null)
+                .show()
         }
     }
 
