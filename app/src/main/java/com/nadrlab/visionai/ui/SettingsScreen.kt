@@ -39,6 +39,9 @@ fun SettingsScreen(viewModel: MainViewModel) {
     var searchEnabled by remember { mutableStateOf(settings.searchEnabled) }
     var ocrEnabled by remember { mutableStateOf(settings.ocrEnabled) }
     var saveHistory by remember { mutableStateOf(settings.saveHistory) }
+    var translationEngine by remember { mutableStateOf(settings.screenTranslationEngine) }
+    var translationTarget by remember { mutableStateOf(settings.screenTranslationTarget) }
+    var showTranslationLanguages by remember { mutableStateOf(false) }
     var showKey by remember { mutableStateOf(false) }
     var showPresets by remember { mutableStateOf(false) }
     var showAddEngine by remember { mutableStateOf(false) }
@@ -192,9 +195,72 @@ fun SettingsScreen(viewModel: MainViewModel) {
         }
 
         // ═══ مترجم الشاشة ═══
-        SettingsCard("مترجم الشاشة التجريبي") {
+        SettingsCard("مترجم الشاشة") {
+            Text("محرك الترجمة", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                RadioButton(
+                    selected = translationEngine == "MLKIT",
+                    onClick = { translationEngine = "MLKIT"; settings.screenTranslationEngine = "MLKIT" },
+                    colors = RadioButtonDefaults.colors(selectedColor = Color(0xFF38BDF8))
+                )
+                Column(Modifier.weight(1f)) {
+                    Text("ML Kit محلي", color = Color.White, fontSize = 13.sp)
+                    Text("يترجم على الهاتف بعد تنزيل نموذج اللغة، ولا يرسل النصوص إلى السحابة.", color = Color(0xFF999999), fontSize = 11.sp)
+                }
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                RadioButton(
+                    selected = translationEngine == "CLOUD",
+                    onClick = { translationEngine = "CLOUD"; settings.screenTranslationEngine = "CLOUD" },
+                    colors = RadioButtonDefaults.colors(selectedColor = Color(0xFF38BDF8))
+                )
+                Column(Modifier.weight(1f)) {
+                    Text("ذكاء اصطناعي سحابي", color = Color.White, fontSize = 13.sp)
+                    Text("يرسل النصوص المقروءة إلى مزود VisionAI أو المزود المخصص المحفوظ في الإعدادات.", color = Color(0xFF999999), fontSize = 11.sp)
+                }
+            }
+            Spacer(Modifier.height(8.dp))
+            Text("لغة الترجمة", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+            OutlinedButton(
+                onClick = { showTranslationLanguages = true },
+                modifier = Modifier.fillMaxWidth(),
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFF38BDF8))
+            ) {
+                Text(when (translationTarget) {
+                    "ar" -> "العربية"
+                    "en" -> "English"
+                    "fr" -> "Français"
+                    "de" -> "Deutsch"
+                    "es" -> "Español"
+                    "tr" -> "Türkçe"
+                    "fa" -> "فارسی"
+                    "ur" -> "اردو"
+                    else -> translationTarget
+                })
+                Icon(Icons.Default.ArrowDropDown, null)
+            }
+            DropdownMenu(
+                expanded = showTranslationLanguages,
+                onDismissRequest = { showTranslationLanguages = false }
+            ) {
+                listOf(
+                    "ar" to "العربية", "en" to "English", "fr" to "Français",
+                    "de" to "Deutsch", "es" to "Español", "tr" to "Türkçe",
+                    "fa" to "فارسی", "ur" to "اردو"
+                ).forEach { (tag, label) ->
+                    DropdownMenuItem(
+                        text = { Text(label) },
+                        onClick = {
+                            translationTarget = tag
+                            settings.screenTranslationTarget = tag
+                            showTranslationLanguages = false
+                        }
+                    )
+                }
+            }
+            Spacer(Modifier.height(8.dp))
             Text(
-                "شغّل خدمة VisionAI لإظهار الزر العائم وقراءة النصوص المتاحة في التطبيقات. لا توجد ترجمة أو عملية إرسال للبيانات في هذه المرحلة.",
+                "يقرأ التطبيق النصوص التي تتيحها التطبيقات عبر خدمة إمكانية الوصول، ثم يعرض الترجمة فوق موضع النص. بعض التطبيقات لا تكشف كل النصوص. على Android 10 لا يتوفر مسار لقطة الشاشة المستخدم في OCR الاحتياطي.",
                 color = Color(0xFFBBBBBB),
                 fontSize = 12.sp
             )
