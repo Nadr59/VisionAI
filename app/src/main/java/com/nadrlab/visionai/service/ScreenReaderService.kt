@@ -22,6 +22,7 @@ import android.view.accessibility.AccessibilityWindowInfo
 import android.widget.FrameLayout
 import android.widget.TextView
 import android.widget.Toast
+import com.nadrlab.visionai.ai.OcrEngine
 import com.nadrlab.visionai.ai.ScreenTranslationEngine
 import com.nadrlab.visionai.data.AppSettings
 import kotlinx.coroutines.runBlocking
@@ -327,35 +328,144 @@ class ScreenReaderService : AccessibilityService() {
                 toast(SCREEN_CHANGED_MESSAGE, long = true)
                 return@scanScreen
             }
-            if (items.isEmpty()) {
-                finishRequest()
-                toast("لم يتمكن التطبيق من قراءة نصوص هذه الشاشة عبر إمكانية الوصول.", long = true)
-                return@scanScreen
+            when {
+                // The app exposes enough text through accessibility.
+                items.size >= MIN_ITEMS_WITHOUT_OCR -> startTranslation(id, items)
+                // Little or no text: read the screen pixels with OCR if screen capture is allowed.
+                ScreenCaptureService.isReady -> captureAndOcr(id, items)
+                items.isEmpty() -> {
+                    finishRequest()
+                    askForCapturePermission()
+                }
+                else -> startTranslation(id, items)
             }
+        }
+    }
 
-            toast("جاري ترجمة ${items.size} مقطعاً... (أول مرة قد يُنزَّل نموذج اللغة)")
-            val texts = items.map { it.text }
-            try {
-                translationExecutor.execute {
-                    try {
-                        val translations = runBlocking {
-                            ScreenTranslationEngine.translateBatch(texts, appSettings)
-                        }
-                        val translatedItems = items.mapIndexedNotNull { index, item ->
-                            val translated = translations.getOrNull(index)?.trim().orEmpty()
-                            if (translated.isBlank() || translated == item.text) null
-                            else item to translated
-                        }
-                        mainHandler.post { onTranslationFinished(id, translatedItems, null) }
-                    } catch (error: Exception) {
-                        Log.e(TAG, "Translation failed", error)
-                        mainHandler.post { onTranslationFinished(id, emptyList(), error) }
+    private fun startTranslation(id: Int, items: List<ScreenItem>) {
+        if (items.isEmpty()) {
+            finishRequest()
+            toast("لم يتمكن التطبيق من قراءة نصوص هذه الشاشة.", long = true)
+            return
+        }
+
+        toast("جاري ترجمة ${items.size} مقطعاً... (أول مرة قد يُنزَّل نموذج اللغة)")
+        val texts = items.map { it.text }
+        try {
+            translationExecutor.execute {
+                try {
+                    val translations = runBlocking {
+                        ScreenTranslationEngine.translateBatch(texts, appSettings)
                     }
+                    val translatedItems = items.mapIndexedNotNull { index, item ->
+                        val translated = translations.getOrNull(index)?.trim().orEmpty()
+                        if (translated.isBlank() || translated == item.text) null
+                        else item to translated
+                    }
+                    mainHandler.post { onTranslationFinished(id, translatedItems, null) }
+                } catch (error: Exception) {
+                    Log.e(TAG, "Translation failed", error)
+                    mainHandler.post { onTranslationFinished(id, emptyList(), error) }
+                }
+            }
+        } catch (error: Exception) {
+            Log.e(TAG, "Unable to schedule translation", error)
+            finishRequest()
+            toast("تعذر بدء الترجمة.", long = true)
+        }
+    }
+
+    // ───────────────────────── OCR fallback (screenshot via MediaProjection) ─────────────────────────
+
+    private fun askForCapturePermission() {
+        toast(
+            "لا توجد نصوص قابلة للقراءة هنا. اسمح بالتقاط الشاشة لتفعيل OCR ثم اضغط الفقاعة مرة أخرى " +
+                "(أو افتح إعدادات VisionAI واضغط «تشغيل OCR»).",
+            long = true
+        )
+        try {
+            startActivity(
+                Intent(this, ScreenCaptureActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            )
+        } catch (error: Exception) {
+            Log.w(TAG, "Unable to open capture permission screen", error)
+        }
+    }
+
+    private fun captureAndOcr(id: Int, accessibilityItems: List<ScreenItem>) {
+        // Our own bubble, toast and previous translations must not end up in the screenshot.
+        currentToast?.cancel()
+        floatingButton?.visibility = View.INVISIBLE
+        translationOverlay?.removeAllViews()
+
+        mainHandler.postDelayed({
+            if (destroyed) return@postDelayed
+            try {
+                scanExecutor.execute {
+                    var ocrItems = emptyList<ScreenItem>()
+                    var failed = false
+                    try {
+                        val bitmap = ScreenCaptureService.captureBlocking()
+                        mainHandler.post { floatingButton?.visibility = View.VISIBLE }
+                        if (bitmap == null) {
+                            failed = true
+                        } else {
+                            try {
+                                ocrItems = OcrEngine.recognizeBlocks(bitmap).mapNotNull { block ->
+                                    val text = block.text.replace('\n', ' ').trim()
+                                    if (text.length < MIN_OCR_TEXT_LENGTH || text.count { it.isLetter() } < 2) null
+                                    else ScreenItem(text.take(MAX_TEXT_LENGTH), block.bounds)
+                                }.take(MAX_ITEMS)
+                            } finally {
+                                bitmap.recycle()
+                            }
+                        }
+                    } catch (error: Exception) {
+                        Log.w(TAG, "OCR failed", error)
+                        mainHandler.post { floatingButton?.visibility = View.VISIBLE }
+                        failed = true
+                    }
+                    val didFail = failed
+                    mainHandler.post { onOcrFinished(id, accessibilityItems, ocrItems, didFail) }
                 }
             } catch (error: Exception) {
-                Log.e(TAG, "Unable to schedule translation", error)
+                Log.e(TAG, "Unable to schedule OCR", error)
+                floatingButton?.visibility = View.VISIBLE
                 finishRequest()
-                toast("تعذر بدء الترجمة.", long = true)
+                toast("تعذر بدء OCR.", long = true)
+            }
+        }, CAPTURE_SETTLE_DELAY_MS)
+    }
+
+    private fun onOcrFinished(
+        id: Int,
+        accessibilityItems: List<ScreenItem>,
+        ocrItems: List<ScreenItem>,
+        failed: Boolean
+    ) {
+        if (destroyed || id != requestId) return
+        if (cancelled) {
+            finishRequest()
+            toast(SCREEN_CHANGED_MESSAGE, long = true)
+            return
+        }
+        // OCR boxes that fall inside a node accessibility already gave us would be translated twice.
+        val extra = ocrItems.filter { ocr ->
+            accessibilityItems.none { it.bounds.contains(ocr.bounds.centerX(), ocr.bounds.centerY()) }
+        }
+        val merged = (accessibilityItems + extra)
+            .sortedWith(compareBy({ it.bounds.top }, { it.bounds.left }))
+            .take(MAX_ITEMS)
+
+        when {
+            merged.isNotEmpty() -> startTranslation(id, merged)
+            failed -> {
+                finishRequest()
+                toast("تعذر التقاط الشاشة. أعد تشغيل OCR من إعدادات التطبيق.", long = true)
+            }
+            else -> {
+                finishRequest()
+                toast("لم أعثر على نص إنجليزي في الشاشة.", long = true)
             }
         }
     }
@@ -577,9 +687,14 @@ class ScreenReaderService : AccessibilityService() {
         try { windowManager?.removeView(view) } catch (_: Exception) { }
     }
 
+    private var currentToast: Toast? = null
+
     private fun toast(message: String, long: Boolean = false) {
         try {
-            Toast.makeText(this, message, if (long) Toast.LENGTH_LONG else Toast.LENGTH_SHORT).show()
+            currentToast?.cancel()
+            val toast = Toast.makeText(this, message, if (long) Toast.LENGTH_LONG else Toast.LENGTH_SHORT)
+            currentToast = toast
+            toast.show()
         } catch (_: Exception) { }
     }
 
@@ -601,6 +716,9 @@ class ScreenReaderService : AccessibilityService() {
         private const val MAX_ITEMS = 60
         private const val MAX_TEXT_LENGTH = 700
         private const val MIN_TEXT_LENGTH = 2
+        private const val MIN_OCR_TEXT_LENGTH = 3
+        private const val MIN_ITEMS_WITHOUT_OCR = 3
+        private const val CAPTURE_SETTLE_DELAY_MS = 300L
         private const val MIN_WIDTH_PX = 20
         private const val MIN_HEIGHT_PX = 10
 
@@ -622,6 +740,26 @@ class ScreenReaderService : AccessibilityService() {
                 service.rebuildWindows()
             }
             return "تمت إعادة إنشاء الفقاعة. إن لم تظهر ستظهر رسالة بسبب الخطأ."
+        }
+
+        /** Called by ScreenCaptureService once the screen capture session is running. */
+        fun onCaptureReady() {
+            val service = instance ?: return
+            service.mainHandler.post {
+                if (!service.destroyed) {
+                    service.toast("OCR جاهز. اضغط الفقاعة مرة أخرى لترجمة الشاشة.", long = true)
+                }
+            }
+        }
+
+        /** Called when the user refused or capture could not start. [message] may be null (plain refusal). */
+        fun onCaptureUnavailable(message: String?) {
+            val service = instance ?: return
+            service.mainHandler.post {
+                if (!service.destroyed) {
+                    service.toast(message ?: "لم يتم السماح بالتقاط الشاشة، لذلك OCR غير مفعّل.", long = true)
+                }
+            }
         }
 
         /** True only while the system really has this service bound and running. */
