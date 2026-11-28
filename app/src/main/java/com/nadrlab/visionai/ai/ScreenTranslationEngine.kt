@@ -1,5 +1,6 @@
 package com.nadrlab.visionai.ai
 
+import android.util.Log
 import com.google.android.gms.tasks.Tasks
 import com.google.mlkit.common.model.DownloadConditions
 import com.google.mlkit.nl.languageid.LanguageIdentification
@@ -12,6 +13,7 @@ import com.nadrlab.visionai.data.AppSettings
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
+import java.util.concurrent.TimeUnit
 
 /** Screen translation backends. Calls run on Dispatchers.IO. */
 object ScreenTranslationEngine {
@@ -20,7 +22,7 @@ object ScreenTranslationEngine {
     private val languageIdentifier by lazy {
         LanguageIdentification.getClient(
             LanguageIdentificationOptions.Builder()
-                .setConfidenceThreshold(0.5f)
+                .setConfidenceThreshold(0.3f)
                 .build()
         )
     }
@@ -45,28 +47,75 @@ object ScreenTranslationEngine {
         val groups = LinkedHashMap<String, MutableList<Int>>()
 
         texts.forEachIndexed { index, text ->
-            val source = try {
-                Tasks.await(languageIdentifier.identifyLanguage(text))
+            val detected = try {
+                Tasks.await(languageIdentifier.identifyLanguage(text), 10, TimeUnit.SECONDS)
             } catch (_: Exception) {
-                "und"
+                UNDETERMINED
             }
-            if (source != "und" && source != targetTag) {
+            // Short UI labels ("Home", "Settings") are often "und"; fall back to the script of the text
+            // instead of silently skipping them.
+            val source = if (detected == UNDETERMINED) guessByScript(text) else detected
+            if (source != null && source != targetTag) {
                 groups.getOrPut(source) { mutableListOf() }.add(index)
             }
         }
 
+        var firstError: Exception? = null
         groups.forEach { (sourceTag, indexes) ->
             val source = TranslateLanguage.fromLanguageTag(sourceTag) ?: return@forEach
-            val translator = getTranslator(source, target)
-            Tasks.await(
-                translator.downloadModelIfNeeded(DownloadConditions.Builder().build())
-            )
-            indexes.forEach { index ->
-                output[index] = Tasks.await(translator.translate(texts[index]))
+            try {
+                val translator = getTranslator(source, target)
+                try {
+                    Tasks.await(
+                        translator.downloadModelIfNeeded(DownloadConditions.Builder().build()),
+                        MODEL_DOWNLOAD_TIMEOUT_SECONDS,
+                        TimeUnit.SECONDS
+                    )
+                } catch (error: Exception) {
+                    throw IllegalStateException(
+                        "تعذر تنزيل نموذج الترجمة ($sourceTag > $targetTag). تأكد من الاتصال بالإنترنت.",
+                        error
+                    )
+                }
+                indexes.forEach { index ->
+                    try {
+                        output[index] = Tasks.await(
+                            translator.translate(texts[index]), TRANSLATE_TIMEOUT_SECONDS, TimeUnit.SECONDS
+                        )
+                    } catch (error: Exception) {
+                        // One failing item must not discard the rest of the batch.
+                        Log.w(TAG, "Translate failed for item $index", error)
+                    }
+                }
+            } catch (error: Exception) {
+                Log.w(TAG, "Translation group $sourceTag failed", error)
+                if (firstError == null) firstError = error
             }
         }
 
+        // Surface the failure only when nothing at all could be translated.
+        val error = firstError
+        if (error != null && output == texts) throw error
+
         return output
+    }
+
+    private fun guessByScript(text: String): String? {
+        var latin = 0
+        var arabic = 0
+        for (ch in text) {
+            if (!ch.isLetter()) continue
+            when (Character.UnicodeScript.of(ch.code)) {
+                Character.UnicodeScript.LATIN -> latin++
+                Character.UnicodeScript.ARABIC -> arabic++
+                else -> Unit
+            }
+        }
+        return when {
+            arabic > latin -> "ar"
+            latin > 0 -> "en"
+            else -> null
+        }
     }
 
     @Synchronized
@@ -137,6 +186,10 @@ object ScreenTranslationEngine {
         translators.clear()
     }
 
+    private const val TAG = "ScreenTranslationEngine"
+    private const val UNDETERMINED = "und"
     private const val ENGINE_CLOUD = "CLOUD"
     private const val MAX_TRANSLATORS = 3
+    private const val MODEL_DOWNLOAD_TIMEOUT_SECONDS = 180L
+    private const val TRANSLATE_TIMEOUT_SECONDS = 30L
 }
